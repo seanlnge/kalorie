@@ -1,0 +1,163 @@
+from datetime import UTC, datetime
+from decimal import Decimal
+
+import pytest
+
+from kalorie2.event_scenarios import EventScenarioCatalog
+from kalorie2.prediction_features import (
+    build_feature_matrix,
+    build_feature_row,
+    extract_market_features,
+    extract_phrase_features,
+    extract_scenario_features,
+    extract_web_evidence_features,
+)
+from kalorie2.prediction_types import PredictionInputRow
+from kalorie2.web_evidence import WebEvidencePacket
+
+
+def _row(**overrides) -> PredictionInputRow:
+    payload = {
+        "market_ticker": "KXEARNINGSMENTIONDE-26MAY21-TARI",
+        "event_ticker": "KXEARNINGSMENTIONDE-26MAY21",
+        "series_ticker": "KXEARNINGSMENTIONDE",
+        "market_category": "earnings",
+        "event_phrase": "What will John Deere say during their next earnings call?",
+        "market_name": "What will John Deere say during their next earnings call? - Tariff",
+        "word_said": "Tariff",
+        "normalized_word_said": "tariff",
+        "final_outcome": "yes",
+        "status": None,
+        "close_time": datetime(2026, 5, 21, 15, 41, 50, tzinfo=UTC),
+        "snapshot_target_time": datetime(2026, 5, 21, 7, 41, 50, tzinfo=UTC),
+        "preclose_yes_bid": Decimal("0.95"),
+        "preclose_yes_ask": Decimal("0.97"),
+        "preclose_yes_mid": Decimal("0.96"),
+        "candle_end_ts": 1779349020,
+        "snapshot_staleness_seconds": 290,
+        "settlement_ts": None,
+        "source": "kalshi_search_series",
+    }
+    payload.update(overrides)
+    return PredictionInputRow.model_validate(payload)
+
+
+def _catalog() -> EventScenarioCatalog:
+    return EventScenarioCatalog.model_validate(
+        {
+            "event_ticker": "KXEARNINGSMENTIONDE-26MAY21",
+            "company_name": "John Deere",
+            "topics": ["Tariffs affecting equipment costs", "Agriculture demand by region"],
+            "analyst_questions": ["How are tariffs affecting margins?"],
+            "management_language_patterns": ["Management may frame tariffs as a cost headwind."],
+            "source_rationales": ["Latest earnings release discusses tariff exposure."],
+            "target_phrase_contexts": [
+                {
+                    "target_phrase": "tariff",
+                    "likely_contexts": [
+                        "Tariff costs are likely to be discussed in margin commentary."
+                    ],
+                    "unlikely_contexts": ["No evidence points to tariff as a product name."],
+                    "evidence_rationale": "The snippets mention tariffs and cost pressure.",
+                }
+            ],
+        }
+    )
+
+
+def _web_packet() -> WebEvidencePacket:
+    return WebEvidencePacket.model_validate(
+        {
+            "event_ticker": "KXEARNINGSMENTIONDE-26MAY21",
+            "company_name": "John Deere",
+            "cutoff_time": "2026-05-21T07:41:50Z",
+            "items": [
+                {
+                    "title": "Tariff pressure before earnings",
+                    "url": "https://example.com/tariff",
+                    "source": "Example News",
+                    "published_at": "2026-05-20T10:00:00Z",
+                    "snippet": "Deere faces tariff cost pressure before earnings.",
+                    "target_phrases": ["tariff"],
+                    "evidence_strength": 0.75,
+                }
+            ],
+        }
+    )
+
+
+def test_extract_market_features_includes_logit_spread_and_staleness():
+    features = extract_market_features(_row())
+
+    assert features["market_yes_bid"] == 0.95
+    assert features["market_yes_ask"] == 0.97
+    assert features["market_yes_mid"] == 0.96
+    assert features["market_spread"] == pytest.approx(0.02)
+    assert features["market_mid_logit"] == pytest.approx(3.178054, abs=0.000001)
+    assert features["snapshot_staleness_hours"] == pytest.approx(290 / 3600)
+    assert features["market_bid_present"] == 1.0
+    assert features["market_ask_present"] == 1.0
+    assert "final_outcome" not in features
+
+
+def test_extract_phrase_features_classifies_count_slash_macro_entity_and_generic_terms():
+    count_features = extract_phrase_features(
+        _row(word_said="Vega (5+ times)", normalized_word_said="vega (5+ times)")
+    )
+    slash_features = extract_phrase_features(
+        _row(word_said="Oil / Gas / Gasoline", normalized_word_said="oil / gas / gasoline")
+    )
+    entity_features = extract_phrase_features(
+        _row(word_said="BlackRock", normalized_word_said="blackrock")
+    )
+    generic_features = extract_phrase_features(
+        _row(word_said="Revenue Growth", normalized_word_said="revenue growth")
+    )
+
+    assert count_features["phrase_has_count_threshold"] == 1.0
+    assert count_features["phrase_count_threshold"] == 5.0
+    assert slash_features["phrase_has_slash_alternatives"] == 1.0
+    assert slash_features["phrase_option_count"] == 3.0
+    assert slash_features["phrase_is_macro"] == 1.0
+    assert entity_features["phrase_is_entity_like"] == 1.0
+    assert generic_features["phrase_is_generic_business"] == 1.0
+    assert generic_features["phrase_is_multiword"] == 1.0
+
+
+def test_extract_scenario_features_scores_target_and_topic_overlap():
+    features = extract_scenario_features(_row(), _catalog())
+
+    assert features["scenario_available"] == 1.0
+    assert features["scenario_topic_overlap_max"] > 0
+    assert features["scenario_target_context_available"] == 1.0
+    assert features["scenario_target_context_overlap_max"] > 0
+    assert features["scenario_text_count"] > 0
+
+
+def test_extract_web_evidence_features_uses_cutoff_safe_packet():
+    features = extract_web_evidence_features(_row(), _web_packet())
+
+    assert features["web_evidence_available"] == 1.0
+    assert features["web_evidence_item_count"] == 1.0
+    assert features["web_evidence_target_overlap"] == 1.0
+    assert features["web_evidence_strength_max"] == 0.75
+
+
+def test_build_feature_row_and_matrix_exclude_label_fields():
+    row = _row()
+
+    feature_row = build_feature_row(row, catalog=_catalog(), web_evidence=_web_packet())
+    matrix = build_feature_matrix(
+        [row],
+        {row.event_ticker: _catalog()},
+        {row.event_ticker: _web_packet()},
+    )
+
+    assert matrix == [feature_row]
+    assert "final_outcome" not in feature_row
+    assert "outcome_label" not in feature_row
+    assert "settlement_ts" not in feature_row
+    assert feature_row["market_yes_mid"] == 0.96
+    assert feature_row["phrase_is_macro"] == 1.0
+    assert feature_row["scenario_available"] == 1.0
+    assert feature_row["web_evidence_available"] == 1.0
