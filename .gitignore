@@ -6,6 +6,8 @@
 *.key
 data/
 artifacts/
+/artifacts-*.json
+.kalorie-cache/
 __pycache__/
 .pytest_cache/
 .ruff_cache/
