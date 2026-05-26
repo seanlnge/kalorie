@@ -1,104 +1,95 @@
 import { AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
 
-import { ExecutionModeControl } from '@/components/ExecutionModeControl'
-import { LiveModelPage } from '@/components/LiveModelPage'
-import { ModelDetailsDrawer } from '@/components/ModelDetailsDrawer'
-import { ModelMetrics } from '@/components/ModelMetrics'
-import { ModelSidebar } from '@/components/ModelSidebar'
-import { PredictionTable } from '@/components/PredictionTable'
-import { ScoringPanel } from '@/components/ScoringPanel'
+import { CurrentMarketsPage } from '@/components/CurrentMarketsPage'
+import { ModelOverviewPage } from '@/components/ModelOverviewPage'
+import { ModelPickerDropdown } from '@/components/ModelPickerDropdown'
 import { TopStatusBar } from '@/components/TopStatusBar'
-import { TradesPage } from '@/components/TradesPage'
+import { TradingHistoryPage } from '@/components/TradingHistoryPage'
 import { usePollSnapshot } from '@/hooks/usePollSnapshot'
 import { useWorkstation } from '@/hooks/useWorkstation'
 
-type ViewId = 'workstation' | 'live' | 'trades'
+type ViewId = 'markets' | 'history' | 'model'
 
 function App() {
   const workstation = useWorkstation()
   const pollSnapshot = usePollSnapshot()
-  const [activeView, setActiveView] = useState<ViewId>('workstation')
+  const [activeView, setActiveView] = useState<ViewId>('markets')
 
   return (
-    <div className="flex min-h-screen bg-background text-foreground">
-      <ModelSidebar
-        models={workstation.models}
-        selectedModelName={workstation.selectedModelName}
-        onSelect={workstation.selectModel}
-      />
-      <div className="min-w-0 flex-1 bg-background/72">
+    <div className="min-h-screen bg-background text-foreground">
+      <div className="mx-auto flex min-h-screen w-full max-w-[1500px] flex-col bg-background/72">
         <TopStatusBar selectedModel={workstation.selectedModel} pollSnapshot={pollSnapshot.snapshot} />
-        <main className="space-y-4 p-4">
-          <nav className="flex w-fit rounded-xl border border-line bg-panel/80 p-1 shadow-terminal">
+        <header className="border-b border-line bg-panel/78 px-4 py-4 shadow-terminal">
+          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+            <div>
+              <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-cyan">
+                Kalorie institutional terminal
+              </p>
+              <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight">
+                Earnings mention market workstation
+              </h1>
+            </div>
+            <ModelPickerDropdown
+              models={workstation.models}
+              selectedModelName={workstation.selectedModelName}
+              onSelect={workstation.selectModel}
+            />
+          </div>
+          <nav className="mt-4 flex flex-wrap gap-2">
             <ViewButton
-              active={activeView === 'workstation'}
-              label="Workbench"
-              onClick={() => setActiveView('workstation')}
+              active={activeView === 'markets'}
+              label="Current Markets"
+              onClick={() => setActiveView('markets')}
             />
             <ViewButton
-              active={activeView === 'live'}
-              label="Live Model"
-              onClick={() => setActiveView('live')}
+              active={activeView === 'history'}
+              label="Trading History"
+              onClick={() => setActiveView('history')}
             />
             <ViewButton
-              active={activeView === 'trades'}
-              label="Trades"
-              onClick={() => setActiveView('trades')}
+              active={activeView === 'model'}
+              label="Model Overview"
+              onClick={() => setActiveView('model')}
             />
           </nav>
+        </header>
+
+        <main className="space-y-4 p-4">
           {workstation.loading ? (
             <SystemNotice tone="cyan" message="Scanning top-level models/* for valid saved bundles..." />
           ) : null}
           {workstation.error ? <SystemNotice tone="amber" message={workstation.error} /> : null}
           {pollSnapshot.error ? <SystemNotice tone="amber" message={pollSnapshot.error} /> : null}
 
-          {activeView === 'workstation' ? (
-            <>
-              <section className="relative overflow-hidden rounded-2xl border border-line bg-panelStrong/70 p-5 shadow-terminal">
-                <div className="absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_top_right,rgb(54_216_255/0.12),transparent_22rem)]" />
-                <div className="relative max-w-5xl">
-                  <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-cyan">
-                    Quant research terminal
-                  </p>
-                  <h2 className="mt-2 font-display text-3xl font-bold tracking-tight">
-                    Saved-model scoring for Kalshi earnings mention markets.
-                  </h2>
-                  <p className="mt-4 max-w-3xl text-sm leading-6 text-muted">
-                    Select a model bundle, inspect the fitted residual engine, score market rows,
-                    and separate broad opportunities from the historically stronger NO-only slice.
-                  </p>
-                </div>
-              </section>
-
-              <ModelMetrics model={workstation.selectedModel} />
-              <ExecutionModeControl
-                mode={workstation.executionMode}
-                onChange={workstation.setExecutionMode}
-              />
-              <ScoringPanel
-                sampleRows={workstation.sampleRows}
-                selectedRowIndex={workstation.selectedRowIndex}
-                scoring={workstation.scoring}
-                onRowIndexChange={workstation.setSelectedRowIndex}
-                onScoreSample={workstation.scoreSelectedRow}
-                onScoreUpload={workstation.scoreUploadedCsv}
-              />
-              <PredictionTable rows={workstation.predictions} />
-              <ModelDetailsDrawer model={workstation.selectedModel} />
-            </>
-          ) : null}
-
-          {activeView === 'live' ? (
-            <LiveModelPage
+          {activeView === 'markets' ? (
+            <CurrentMarketsPage
               snapshot={pollSnapshot.snapshot}
               loading={pollSnapshot.loading}
               onRefresh={() => void pollSnapshot.refresh()}
             />
           ) : null}
 
-          {activeView === 'trades' ? (
-            <TradesPage snapshot={pollSnapshot.snapshot} trades={pollSnapshot.trades} />
+          {activeView === 'history' ? (
+            <TradingHistoryPage history={pollSnapshot.history} />
+          ) : null}
+
+          {activeView === 'model' ? (
+            <ModelOverviewPage
+              model={workstation.selectedModel}
+              sampleRows={workstation.sampleRows}
+              selectedRowIndex={workstation.selectedRowIndex}
+              scoring={workstation.scoring}
+              predictions={workstation.predictions}
+              currentMarketRows={
+                pollSnapshot.snapshot?.model_name === workstation.selectedModelName
+                  ? pollSnapshot.snapshot.prediction_rows
+                  : []
+              }
+              onRowIndexChange={workstation.setSelectedRowIndex}
+              onScoreSample={workstation.scoreSelectedRow}
+              onScoreUpload={workstation.scoreUploadedCsv}
+            />
           ) : null}
         </main>
       </div>
@@ -134,10 +125,10 @@ function ViewButton({ active, label, onClick }: ViewButtonProps) {
       type="button"
       onClick={onClick}
       className={[
-        'rounded-lg border-t px-5 py-2 font-mono text-xs uppercase tracking-[0.16em] transition',
+        'rounded-md border px-4 py-2 font-mono text-xs uppercase tracking-[0.16em] transition',
         active
-          ? 'border-cyan/70 bg-panelStrong text-cyan shadow-bloom'
-          : 'border-transparent text-muted hover:text-foreground',
+          ? 'border-cyan/70 bg-background text-cyan'
+          : 'border-line bg-panel text-muted hover:border-muted/50 hover:text-foreground',
       ].join(' ')}
     >
       {label}

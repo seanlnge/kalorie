@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import os
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -23,6 +24,11 @@ from kalorie2.saved_models import (
     CachedRuntimeSavedModelScorer,
     SavedModelRegistry,
     normalize_score_payload,
+)
+from kalorie2.web_evidence import (
+    build_openai_web_search_payload,
+    build_web_evidence_prompt,
+    parse_web_evidence_response,
 )
 
 app = typer.Typer(help="Poll active Kalshi mention markets with a saved model.")
@@ -118,6 +124,11 @@ class MarketScorer(Protocol):
         pass
 
 
+class LiveWebEvidenceSource(Protocol):
+    def fetch_packets(self, markets: list[ActiveMarketRow]) -> dict[str, Any]:
+        pass
+
+
 class KalshiActiveMarketSource:
     def __init__(
         self,
@@ -163,9 +174,15 @@ class KalshiActiveMarketSource:
 
 
 class CachedSavedModelMarketScorer:
-    def __init__(self, *, models_root: Path) -> None:
+    def __init__(
+        self,
+        *,
+        models_root: Path,
+        web_evidence_source: LiveWebEvidenceSource | None = None,
+    ) -> None:
         self._registry = SavedModelRegistry(models_root=models_root)
         self._scorers: dict[str, CachedRuntimeSavedModelScorer] = {}
+        self._web_evidence_source = web_evidence_source
 
     def score_active_markets(
         self,
@@ -178,11 +195,68 @@ class CachedSavedModelMarketScorer:
         if scorer is None:
             scorer = CachedRuntimeSavedModelScorer(model_dir)
             self._scorers[model_name] = scorer
+        live_web_evidence_packets = {}
+        if self._web_evidence_source is not None:
+            raw_packets = self._web_evidence_source.fetch_packets(markets)
+            live_web_evidence_packets = _coerce_live_packets_for_runtime(
+                scorer,
+                raw_packets,
+            )
         predictions = []
         for market in markets:
-            score_row = scorer.score_row_dict(market.to_runtime_row())
+            score_row = scorer.score_row_dict(
+                market.to_runtime_row(),
+                web_evidence_by_event=live_web_evidence_packets or None,
+            )
             predictions.append(_poll_row_from_score(market, model_name, score_row.model_dump()))
         return predictions
+
+
+class OpenAIWebEvidenceSource:
+    def __init__(
+        self,
+        *,
+        model: str,
+        timeout_seconds: float = 120.0,
+        fetch_web_evidence_packet: Callable[..., dict[str, Any]] | None = None,
+    ) -> None:
+        self._model = model
+        self._timeout_seconds = timeout_seconds
+        self._fetch_web_evidence_packet = fetch_web_evidence_packet or _fetch_web_evidence_packet
+
+    def fetch_packets(self, markets: list[ActiveMarketRow]) -> dict[str, Any]:
+        if not markets:
+            return {}
+        grouped_markets: dict[str, list[ActiveMarketRow]] = {}
+        for market in markets:
+            grouped_markets.setdefault(market.event_ticker, []).append(market)
+        packets = {}
+        cutoff_time_iso = datetime.now(tz=UTC).isoformat()
+        for event_ticker, event_markets in grouped_markets.items():
+            first_market = event_markets[0]
+            target_phrases = sorted(
+                {
+                    event_market.target_phrase.strip().lower()
+                    for event_market in event_markets
+                    if event_market.target_phrase.strip()
+                }
+            )
+            try:
+                payload = self._fetch_web_evidence_packet(
+                    event_ticker=event_ticker,
+                    company_name=_company_name_from_event_title(first_market.event_title),
+                    cutoff_time_iso=cutoff_time_iso,
+                    target_phrases=target_phrases,
+                    model=self._model,
+                    timeout_seconds=self._timeout_seconds,
+                )
+                packets[event_ticker] = payload
+            except Exception as exc:  # noqa: BLE001
+                typer.echo(
+                    f"warning: live web evidence fetch failed for {event_ticker}: {exc}",
+                    err=True,
+                )
+        return packets
 
 
 class MarketPollCacheStore:
@@ -223,6 +297,21 @@ class MarketPollCacheStore:
             PollPredictionRow.model_validate(row)
             for row in json.loads(self.latest_trades_path.read_text(encoding="utf-8"))
         ]
+
+    def read_history(self, *, limit: int = 50) -> list[MarketPollSnapshot]:
+        history_root = self._root / "history"
+        if not history_root.exists():
+            return []
+        snapshots: list[MarketPollSnapshot] = []
+        for path in sorted(history_root.glob("*.json"), reverse=True):
+            if len(snapshots) >= limit:
+                break
+            snapshots.append(
+                MarketPollSnapshot.model_validate(
+                    json.loads(path.read_text(encoding="utf-8"))
+                )
+            )
+        return snapshots
 
 
 class ActiveMarketPoller:
@@ -310,14 +399,29 @@ def poll_once_command(
     models_root: Annotated[Path | None, typer.Option()] = None,
     cache_root: Annotated[Path | None, typer.Option()] = None,
     max_pages: Annotated[int | None, typer.Option()] = None,
+    live_web_evidence: Annotated[bool, typer.Option("--live-web-evidence/--no-live-web-evidence")] = True,
+    web_search_model: Annotated[str, typer.Option()] = "gpt-5.4-mini",
+    web_search_timeout_seconds: Annotated[float, typer.Option(min=1.0)] = 120.0,
 ) -> None:
     models_root = models_root or default_models_root()
     cache_root = cache_root or default_poll_cache_root()
+    _load_env_file(_default_env_path())
     resolved_model_name = preferred_model_name(models_root, model_name)
+    web_evidence_source = (
+        OpenAIWebEvidenceSource(
+            model=web_search_model,
+            timeout_seconds=web_search_timeout_seconds,
+        )
+        if live_web_evidence
+        else None
+    )
     with httpx.Client(timeout=30) as http_client:
         poller = ActiveMarketPoller(
             market_source=KalshiActiveMarketSource(http_client=http_client, max_pages=max_pages),
-            scorer=CachedSavedModelMarketScorer(models_root=models_root),
+            scorer=CachedSavedModelMarketScorer(
+                models_root=models_root,
+                web_evidence_source=web_evidence_source,
+            ),
             cache_store=MarketPollCacheStore(root=cache_root),
         )
         snapshot = poller.run_once(model_name=resolved_model_name)
@@ -334,11 +438,26 @@ def poll_loop_command(
     cache_root: Annotated[Path | None, typer.Option()] = None,
     interval_seconds: Annotated[int, typer.Option(min=1)] = 600,
     max_pages: Annotated[int | None, typer.Option()] = None,
+    live_web_evidence: Annotated[bool, typer.Option("--live-web-evidence/--no-live-web-evidence")] = True,
+    web_search_model: Annotated[str, typer.Option()] = "gpt-5.4-mini",
+    web_search_timeout_seconds: Annotated[float, typer.Option(min=1.0)] = 120.0,
 ) -> None:
     models_root = models_root or default_models_root()
     cache_root = cache_root or default_poll_cache_root()
+    _load_env_file(_default_env_path())
     resolved_model_name = preferred_model_name(models_root, model_name)
-    scorer = CachedSavedModelMarketScorer(models_root=models_root)
+    web_evidence_source = (
+        OpenAIWebEvidenceSource(
+            model=web_search_model,
+            timeout_seconds=web_search_timeout_seconds,
+        )
+        if live_web_evidence
+        else None
+    )
+    scorer = CachedSavedModelMarketScorer(
+        models_root=models_root,
+        web_evidence_source=web_evidence_source,
+    )
     cache_store = MarketPollCacheStore(root=cache_root)
     while True:
         with httpx.Client(timeout=30) as http_client:
@@ -389,6 +508,10 @@ def default_poll_cache_root() -> Path:
     return Path(__file__).resolve().parents[2] / "artifacts" / "runtime" / "workstation"
 
 
+def _default_env_path() -> Path:
+    return Path(__file__).resolve().parents[2] / ".env"
+
+
 def preferred_model_name(models_root: Path, requested_model_name: str | None) -> str:
     if requested_model_name:
         return requested_model_name
@@ -396,10 +519,6 @@ def preferred_model_name(models_root: Path, requested_model_name: str | None) ->
     models = registry.list_models()
     if not models:
         raise typer.BadParameter(f"No valid saved models found under {models_root}")
-    names = {model.name for model in models}
-    for candidate in ("kalorie-v2", "earnings-mention-full-web-residual-v1"):
-        if candidate in names:
-            return candidate
     return models[0].name
 
 
@@ -436,6 +555,17 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
 
+def _load_env_file(path: Path) -> None:
+    if not path.exists():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+
+
 def _price_probability(payload: dict[str, Any], key: str) -> float | None:
     for candidate_key in (f"{key}_dollars", key):
         value = payload.get(candidate_key)
@@ -448,3 +578,84 @@ def _price_probability(payload: dict[str, Any], key: str) -> float | None:
 
 def _format_probability(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _company_name_from_event_title(event_title: str) -> str:
+    lowered = event_title.lower()
+    if lowered.startswith("what will ") and " say" in lowered:
+        return event_title[len("What will ") : lowered.index(" say")].strip()
+    return event_title.strip()
+
+
+def _coerce_live_packets_for_runtime(
+    scorer: CachedRuntimeSavedModelScorer,
+    packets: dict[str, Any],
+) -> dict[str, Any]:
+    existing_packets = getattr(scorer, "_web_evidence_by_event", {})
+    if not existing_packets:
+        return packets
+    sample_packet = next(iter(existing_packets.values()), None)
+    if sample_packet is None:
+        return packets
+    coerced = {}
+    for event_ticker, packet in packets.items():
+        if isinstance(sample_packet, dict):
+            if hasattr(packet, "model_dump"):
+                coerced[event_ticker] = packet.model_dump(mode="json")
+            else:
+                coerced[event_ticker] = packet
+            continue
+        if hasattr(sample_packet.__class__, "model_validate"):
+            if isinstance(packet, sample_packet.__class__):
+                coerced[event_ticker] = packet
+            elif hasattr(packet, "model_dump"):
+                coerced[event_ticker] = sample_packet.__class__.model_validate(
+                    packet.model_dump(mode="json")
+                )
+            else:
+                coerced[event_ticker] = sample_packet.__class__.model_validate(packet)
+            continue
+        coerced[event_ticker] = packet
+    return coerced
+
+
+def _fetch_web_evidence_packet(
+    *,
+    event_ticker: str,
+    company_name: str,
+    cutoff_time_iso: str,
+    target_phrases: list[str],
+    model: str,
+    timeout_seconds: float,
+) -> dict[str, Any]:
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY is required for --live-web-evidence")
+    prompt = build_web_evidence_prompt(
+        event={
+            "event_ticker": event_ticker,
+            "company_name": company_name,
+            "cutoff_time": cutoff_time_iso,
+        },
+        target_phrases=target_phrases,
+    )
+    payload = build_openai_web_search_payload(prompt=prompt, model=model)
+    with httpx.Client(timeout=timeout_seconds) as client:
+        response = client.post(
+            "https://api.openai.com/v1/responses",
+            headers={"Authorization": f"Bearer {api_key}"},
+            json=payload,
+        )
+        response.raise_for_status()
+    packet = parse_web_evidence_response(_response_output_text(response.json()))
+    return packet.model_dump(mode="json")
+
+
+def _response_output_text(payload: dict[str, Any]) -> str:
+    if isinstance(payload.get("output_text"), str):
+        return payload["output_text"]
+    for output in payload.get("output", []):
+        for content in output.get("content", []):
+            if isinstance(content.get("text"), str):
+                return content["text"]
+    raise ValueError("OpenAI response did not include output text")

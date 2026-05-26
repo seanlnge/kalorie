@@ -33,3 +33,7 @@ For modeling runs, do not let broad artifact directories such as `artifacts/full
 ## 2026-05-25: Do not estimate OpenAI agentic web-search costs from final JSON size
 
 For Responses API runs that use web search and frontier reasoning models, do not treat the saved final JSON packet size as the billed output. The API may bill for hidden reasoning, tool orchestration, retries, failed/rate-limited attempts, or other usage not reflected in the parsed artifact. Before scaling a paid collection, run a tiny metered sample, persist the raw response `usage`/billing metadata, and enforce explicit `max_paid_calls` / budget caps.
+
+## 2026-05-26: Use absolute source paths in process launchers
+
+When a launcher starts child Python processes, set `PYTHONPATH` to an absolute `src` path rather than a relative `src`. In Git Bash/MSYS on Windows, convert that path with `cygpath -w` before handing it to Windows Python. Child process working-directory and environment inheritance can differ from the parent shell's assumptions, and import failures should be caught by actually starting the launcher, not just parser checks.

@@ -33,7 +33,7 @@ export function ScoringPanel({
 
   return (
     <section className="grid gap-4 lg:grid-cols-[1fr_1fr]">
-      <div className="rounded-2xl border border-line bg-panel/80 p-4 shadow-terminal">
+      <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-terminal">
         <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted">Scoring Panel</p>
         <h2 className="font-display text-lg font-semibold">Score a bundled training row</h2>
         <div className="mt-4 flex flex-wrap items-end gap-3">
@@ -42,7 +42,7 @@ export function ScoringPanel({
             <select
               value={selectedRowIndex}
               onChange={(event) => onRowIndexChange(Number(event.target.value))}
-              className="min-w-72 rounded-xl border border-line bg-background px-3 py-3 font-mono text-sm text-foreground"
+              className="min-w-72 rounded-md border border-line bg-background px-3 py-3 font-mono text-sm text-foreground"
             >
               {sampleRows.map((row) => (
                 <option key={row.row_index} value={row.row_index}>
@@ -55,7 +55,7 @@ export function ScoringPanel({
             type="button"
             onClick={() => void onScoreSample()}
             disabled={scoring || sampleRows.length === 0}
-            className="inline-flex items-center gap-2 rounded-xl bg-green px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-background transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md bg-green px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-background transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Zap size={16} />
             {scoring ? 'Scoring...' : 'Score sample'}
@@ -63,7 +63,7 @@ export function ScoringPanel({
         </div>
       </div>
 
-      <div className="rounded-2xl border border-dashed border-cyan/35 bg-cyan/5 p-4 shadow-terminal">
+      <div className="rounded-lg border border-dashed border-cyan/35 bg-cyan/5 p-4 shadow-terminal">
         <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-cyan">CSV Upload</p>
         <h2 className="font-display text-lg font-semibold">Score an external row CSV</h2>
         <p className="mt-2 text-sm leading-6 text-muted">
@@ -82,7 +82,7 @@ export function ScoringPanel({
             type="button"
             onClick={() => inputRef.current?.click()}
             disabled={scoring}
-            className="inline-flex items-center gap-2 rounded-xl border border-cyan/40 px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-cyan transition hover:bg-cyan/10 disabled:cursor-not-allowed disabled:opacity-50"
+            className="inline-flex items-center gap-2 rounded-md border border-cyan/40 px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-cyan transition hover:bg-cyan/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <UploadCloud size={16} />
             Upload CSV

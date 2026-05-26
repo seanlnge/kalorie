@@ -1,16 +1,23 @@
+@import '@fontsource/ibm-plex-sans/400.css';
+@import '@fontsource/ibm-plex-sans/500.css';
+@import '@fontsource/ibm-plex-sans/600.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+@import '@fontsource/ibm-plex-mono/500.css';
+@import '@fontsource/ibm-plex-mono/600.css';
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --background: 5 7 11;
-  --foreground: 232 241 248;
-  --panel: 12 17 24;
-  --panel-strong: 18 26 36;
-  --line: 34 48 65;
-  --muted: 145 164 183;
-  --cyan: 54 216 255;
-  --green: 69 224 163;
+  --background: 7 9 12;
+  --foreground: 231 236 241;
+  --panel: 13 16 20;
+  --panel-strong: 20 24 29;
+  --line: 48 56 66;
+  --muted: 145 154 165;
+  --cyan: 109 214 237;
+  --green: 88 211 154;
   --amber: 242 184 75;
   --red: 240 113 120;
   color-scheme: dark;
@@ -31,15 +38,11 @@ body {
   margin: 0;
   background:
     linear-gradient(rgb(34 48 65 / 0.1) 1px, transparent 1px),
-    linear-gradient(90deg, rgb(34 48 65 / 0.08) 1px, transparent 1px),
-    radial-gradient(circle at top left, rgb(54 216 255 / 0.12), transparent 36rem),
-    radial-gradient(circle at 82% 8%, rgb(69 224 163 / 0.08), transparent 30rem),
+    linear-gradient(90deg, rgb(34 48 65 / 0.07) 1px, transparent 1px),
     rgb(var(--background));
   background-size:
     32px 32px,
     32px 32px,
-    auto,
-    auto,
     auto;
   color: rgb(var(--foreground));
   font-family: theme('fontFamily.body');

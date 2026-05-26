@@ -156,6 +156,23 @@ def test_live_trades_endpoint_returns_latest_cached_trade_rows(tmp_path: Path) -
     assert response.json()["trades"][0]["side"] == "NO"
 
 
+def test_poll_history_endpoint_returns_recent_cached_snapshots_newest_first(tmp_path: Path) -> None:
+    cache_root = tmp_path / "cache"
+    _write_poll_snapshot(cache_root, poll_id="20260526-040000", edge=0.06)
+    _write_poll_snapshot(cache_root, poll_id="20260526-041000", edge=0.09)
+    client = TestClient(create_app(models_root=tmp_path / "models", poll_cache_root=cache_root))
+
+    response = client.get("/api/polls/history")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert [snapshot["poll_id"] for snapshot in payload["snapshots"]] == [
+        "20260526-041000",
+        "20260526-040000",
+    ]
+    assert payload["snapshots"][0]["trade_rows"][0]["edge"] == 0.09
+
+
 def test_live_poll_endpoint_returns_404_before_first_poll(tmp_path: Path) -> None:
     client = TestClient(
         create_app(models_root=tmp_path / "models", poll_cache_root=tmp_path / "cache")
@@ -166,7 +183,12 @@ def test_live_poll_endpoint_returns_404_before_first_poll(tmp_path: Path) -> Non
     assert response.status_code == 404
 
 
-def _write_poll_snapshot(cache_root: Path) -> None:
+def _write_poll_snapshot(
+    cache_root: Path,
+    *,
+    poll_id: str = "20260526-040000",
+    edge: float = 0.06,
+) -> None:
     row = PollPredictionRow(
         market_ticker="MARKET-1",
         event_ticker="EVENT-1",
@@ -178,13 +200,13 @@ def _write_poll_snapshot(cache_root: Path) -> None:
         yes_ask=0.4,
         residual_delta=-0.29,
         side="NO",
-        edge=0.06,
+        edge=edge,
         cost=0.63,
         volume=123,
     )
     MarketPollCacheStore(root=cache_root).write_snapshot(
         MarketPollSnapshot(
-            poll_id="20260526-040000",
+            poll_id=poll_id,
             model_name="unit-model",
             started_at=datetime(2026, 5, 26, 4, 0, tzinfo=UTC),
             completed_at=datetime(2026, 5, 26, 4, 0, 1, tzinfo=UTC),

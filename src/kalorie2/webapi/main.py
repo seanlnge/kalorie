@@ -113,6 +113,14 @@ def create_app(
             {"trades": [row.model_dump(mode="json") for row in cache_store.read_latest_trades()]}
         )
 
+    @app.get("/api/polls/history")
+    def poll_history(limit: int = 50) -> JSONResponse:
+        cache_store: MarketPollCacheStore = app.state.poll_cache_store
+        snapshots = cache_store.read_history(limit=limit)
+        return JSONResponse(
+            {"snapshots": [snapshot.model_dump(mode="json") for snapshot in snapshots]}
+        )
+
     return app
 
 

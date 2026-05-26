@@ -12,7 +12,7 @@ export function PredictionTable({ rows }: PredictionTableProps) {
   const orderedRows = [...rows].sort((left, right) => Math.abs(right.edge) - Math.abs(left.edge))
 
   return (
-    <section className="rounded-2xl border border-line bg-panel/80 p-4 shadow-terminal">
+    <section className="rounded-lg border border-line bg-panel/80 p-4 shadow-terminal">
       <div className="mb-4 flex items-center justify-between">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted">

@@ -37,7 +37,7 @@ export function ModelMetrics({ model }: ModelMetricsProps) {
         />
       </div>
 
-      <div className="rounded-2xl border border-line bg-panel/80 p-4 shadow-terminal">
+      <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-terminal">
         <div className="mb-4 flex items-center justify-between">
           <div>
             <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted">
@@ -73,7 +73,7 @@ interface MetricCardProps {
 
 function MetricCard({ icon, label, value }: MetricCardProps) {
   return (
-    <div className="rounded-2xl border border-line bg-panel/80 p-4 shadow-terminal">
+    <div className="rounded-lg border border-line bg-panel/80 p-4 shadow-terminal">
       <div className="mb-4 flex h-9 w-9 items-center justify-center rounded-lg border border-cyan/30 bg-cyan/10 text-cyan">
         {icon}
       </div>

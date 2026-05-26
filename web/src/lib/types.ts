@@ -20,6 +20,55 @@ export interface EvaluationSnapshot {
   notes?: string | null
 }
 
+export interface ModelCardMetricValue {
+  value: number
+  unit?: string | null
+  description?: string | null
+  ci95?: {
+    low: number
+    high: number
+    method?: string | null
+    confidence_level?: number | null
+  } | null
+}
+
+export interface ModelCardEvaluationSplit {
+  name: string
+  role: string
+  event_count: number
+  market_count: number
+  policy: string
+  margin: number
+  metrics: Record<string, ModelCardMetricValue>
+  notes?: string | null
+}
+
+export interface ModelCardPreview {
+  split_name: string
+  role?: string | null
+  policy?: string | null
+  trade_count?: number | null
+  market_count?: number | null
+  trade_percent?: number | null
+  brier?: number | null
+  roi_on_cost?: number | null
+  ev_per_10_trades?: number | null
+}
+
+export interface ModelCard {
+  schema_version?: string
+  model_name: string
+  model_version?: number | null
+  model_type: string
+  default_execution_policy: string
+  default_margin: number
+  training_data: Record<string, number | string | null>
+  feature_set: Record<string, number | string | string[] | null>
+  evaluation_splits: ModelCardEvaluationSplit[]
+  caveats?: string[]
+  recommended_use?: string | null
+}
+
 export interface SavedModelMetadata {
   name: string
   path: string
@@ -32,6 +81,8 @@ export interface SavedModelMetadata {
   training: TrainingSummary
   evaluation_snapshots: EvaluationSnapshot[]
   artifact_paths: Record<string, string>
+  model_card?: ModelCard | null
+  model_card_preview?: ModelCardPreview | null
 }
 
 export interface SampleRow {

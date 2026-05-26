@@ -108,6 +108,125 @@ def test_registry_uses_folder_slug_as_selectable_model_name(tmp_path: Path) -> N
     assert registry.get_model("folder-slug").name == "folder-slug"
 
 
+def test_registry_parses_model_card_and_computed_picker_preview(tmp_path: Path) -> None:
+    model_dir = _write_bundle(tmp_path, "card-model")
+    _write_json(
+        model_dir / "artifacts" / "model-card.json",
+        {
+            "model_name": "card-model",
+            "model_type": "market_anchored_linear_residual",
+            "model_version": 7,
+            "default_execution_policy": "no_only",
+            "default_margin": 0.02,
+            "training_data": {"row_count": 10, "event_count": 2},
+            "feature_set": {"feature_count": 3},
+            "evaluation_splits": [
+                {
+                    "name": "latest30",
+                    "role": "test",
+                    "event_count": 30,
+                    "market_count": 380,
+                    "policy": "no_only",
+                    "margin": 0.02,
+                    "metrics": {
+                        "trade_count": {"value": 35},
+                        "roi_on_cost": {"value": 0.293532},
+                        "total_cost": {"value": 20.1},
+                        "total_pnl": {"value": 5.9},
+                        "brier": {"value": 0.162254},
+                    },
+                }
+            ],
+        },
+    )
+
+    metadata = SavedModelRegistry(models_root=tmp_path).get_model("card-model")
+
+    assert metadata.model_card is not None
+    assert metadata.model_card["model_version"] == 7
+    assert metadata.model_card_preview is not None
+    assert metadata.model_card_preview.split_name == "latest30"
+    assert metadata.model_card_preview.trade_count == 35
+    assert metadata.model_card_preview.market_count == 380
+    assert metadata.model_card_preview.trade_percent == 35 / 380
+    assert metadata.model_card_preview.brier == 0.162254
+    assert metadata.model_card_preview.ev_per_10_trades == (0.293532 * 20.1 / 35) * 10
+
+
+def test_registry_model_card_preview_preserves_zero_trade_percent(tmp_path: Path) -> None:
+    model_dir = _write_bundle(tmp_path, "zero-trade-card")
+    _write_json(
+        model_dir / "artifacts" / "model-card.json",
+        {
+            "model_name": "zero-trade-card",
+            "model_type": "market_anchored_linear_residual",
+            "default_execution_policy": "no_only",
+            "default_margin": 0.02,
+            "training_data": {},
+            "feature_set": {},
+            "evaluation_splits": [
+                {
+                    "name": "latest30",
+                    "role": "test",
+                    "event_count": 30,
+                    "market_count": 100,
+                    "policy": "no_only",
+                    "margin": 0.02,
+                    "metrics": {
+                        "trade_count": {"value": 0},
+                        "brier": {"value": 0.21},
+                    },
+                }
+            ],
+        },
+    )
+
+    preview = (
+        SavedModelRegistry(models_root=tmp_path)
+        .get_model("zero-trade-card")
+        .model_card_preview
+    )
+
+    assert preview is not None
+    assert preview.trade_count == 0
+    assert preview.trade_percent == 0
+
+
+def test_registry_sorts_newest_models_first_using_model_card_version(tmp_path: Path) -> None:
+    older_dir = _write_bundle(tmp_path, "aaa-older-card")
+    newer_dir = _write_bundle(tmp_path, "zzz-newer-card")
+    _write_json(
+        older_dir / "artifacts" / "model-card.json",
+        {
+            "model_name": "aaa-older-card",
+            "model_type": "test",
+            "model_version": 1,
+            "default_execution_policy": "no_only",
+            "default_margin": 0.02,
+            "training_data": {},
+            "feature_set": {},
+            "evaluation_splits": [],
+        },
+    )
+    _write_json(
+        newer_dir / "artifacts" / "model-card.json",
+        {
+            "model_name": "zzz-newer-card",
+            "model_type": "test",
+            "model_version": 9,
+            "default_execution_policy": "no_only",
+            "default_margin": 0.02,
+            "training_data": {},
+            "feature_set": {},
+            "evaluation_splits": [],
+        },
+    )
+
+    models = SavedModelRegistry(models_root=tmp_path).list_models()
+
+    assert [model.name for model in models] == ["zzz-newer-card", "aaa-older-card"]
+
+
 def test_scorer_invokes_runtime_and_normalizes_trade_rows(tmp_path: Path) -> None:
     model_dir = _write_bundle(tmp_path, "unit-model")
     runtime_path = model_dir / "runtime" / "model_runtime.py"

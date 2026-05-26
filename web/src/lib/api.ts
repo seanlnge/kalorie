@@ -73,3 +73,8 @@ export async function getLatestTrades(): Promise<PollPredictionRow[]> {
   const payload = await request<{ trades: PollPredictionRow[] }>('/api/trades/latest')
   return payload.trades
 }
+
+export async function getPollHistory(limit = 50): Promise<PollSnapshot[]> {
+  const payload = await request<{ snapshots: PollSnapshot[] }>(`/api/polls/history?limit=${limit}`)
+  return payload.snapshots
+}

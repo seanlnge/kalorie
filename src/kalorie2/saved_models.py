@@ -36,6 +36,18 @@ class SavedModelEvaluationSnapshot(SavedModelBase):
     notes: str | None = None
 
 
+class SavedModelCardPreview(SavedModelBase):
+    split_name: str
+    role: str | None = None
+    policy: str | None = None
+    trade_count: int | None = None
+    market_count: int | None = None
+    trade_percent: float | None = None
+    brier: float | None = None
+    roi_on_cost: float | None = None
+    ev_per_10_trades: float | None = None
+
+
 class SavedModelMetadata(SavedModelBase):
     name: str
     path: str
@@ -48,6 +60,8 @@ class SavedModelMetadata(SavedModelBase):
     training: SavedModelTrainingSummary
     evaluation_snapshots: list[SavedModelEvaluationSnapshot] = Field(default_factory=list)
     artifact_paths: dict[str, str] = Field(default_factory=dict)
+    model_card: dict[str, Any] | None = None
+    model_card_preview: SavedModelCardPreview | None = None
 
 
 class SavedModelScoreRow(SavedModelBase):
@@ -75,7 +89,7 @@ class SavedModelRegistry:
             for path in sorted(self._models_root.iterdir(), key=lambda current: current.name)
             if path.is_dir() and is_valid_model_dir(path)
         ]
-        return models
+        return sorted(models, key=_model_sort_key, reverse=True)
 
     def get_model(self, name: str) -> SavedModelMetadata:
         model_dir = self._models_root / name
@@ -96,6 +110,7 @@ class SavedModelRegistry:
         evaluation_reports = _read_optional_json(
             model_dir / "artifacts" / "evaluation-reports.json"
         )
+        model_card = _read_optional_json(model_dir / "artifacts" / "model-card.json") or None
         readme = (model_dir / "README.md").read_text(encoding="utf-8")
 
         model_block = _dict(model_payload.get("model"))
@@ -130,6 +145,8 @@ class SavedModelRegistry:
             ),
             evaluation_snapshots=_evaluation_snapshots(evaluation_reports),
             artifact_paths=_artifact_paths(model_dir),
+            model_card=model_card,
+            model_card_preview=_model_card_preview(model_card),
         )
 
 
@@ -171,11 +188,19 @@ class CachedRuntimeSavedModelScorer:
         self._model_payload = self._runtime.load_model(model_dir)
         self._web_evidence_by_event = self._runtime.load_web_evidence(model_dir)
 
-    def score_row_dict(self, row: dict[str, Any]) -> SavedModelScoreRow:
+    def score_row_dict(
+        self,
+        row: dict[str, Any],
+        *,
+        web_evidence_by_event: dict[str, Any] | None = None,
+    ) -> SavedModelScoreRow:
+        effective_web_evidence = self._web_evidence_by_event
+        if web_evidence_by_event:
+            effective_web_evidence = {**effective_web_evidence, **web_evidence_by_event}
         payload = self._runtime.score_row(
             row,
             self._model_payload,
-            self._web_evidence_by_event,
+            effective_web_evidence,
         )
         return normalize_score_payload(payload)
 
@@ -227,6 +252,7 @@ def _artifact_paths(model_dir: Path) -> dict[str, str]:
         "feature_schema": model_dir / "artifacts" / "feature-schema.json",
         "training_manifest": model_dir / "artifacts" / "training-manifest.json",
         "evaluation_reports": model_dir / "artifacts" / "evaluation-reports.json",
+        "model_card": model_dir / "artifacts" / "model-card.json",
     }
     return {
         name: str(path.relative_to(model_dir)).replace("\\", "/")
@@ -282,6 +308,95 @@ def _evaluation_snapshots(payload: dict[str, Any]) -> list[SavedModelEvaluationS
                 )
             )
     return snapshots
+
+
+def _model_card_preview(payload: dict[str, Any] | None) -> SavedModelCardPreview | None:
+    if not payload:
+        return None
+    splits = payload.get("evaluation_splits")
+    if not isinstance(splits, list):
+        return None
+    default_policy = _optional_str(payload.get("default_execution_policy"))
+    split = _primary_model_card_split(splits, default_policy=default_policy)
+    if split is None:
+        return None
+    metrics = _dict(split.get("metrics"))
+    trade_count = _optional_int(_metric_value(metrics, "trade_count"))
+    market_count = _optional_int(split.get("market_count"))
+    total_cost = _optional_float(_metric_value(metrics, "total_cost"))
+    total_pnl = _optional_float(_metric_value(metrics, "total_pnl"))
+    roi_on_cost = _optional_float(_metric_value(metrics, "roi_on_cost"))
+    ev_per_10_trades = _ev_per_10_trades(
+        roi_on_cost=roi_on_cost,
+        total_cost=total_cost,
+        total_pnl=total_pnl,
+        trade_count=trade_count,
+    )
+    return SavedModelCardPreview(
+        split_name=str(split.get("name") or "evaluation"),
+        role=_optional_str(split.get("role")),
+        policy=_optional_str(split.get("policy")),
+        trade_count=trade_count,
+        market_count=market_count,
+        trade_percent=trade_count / market_count
+        if trade_count is not None and market_count
+        else None,
+        brier=_optional_float(_metric_value(metrics, "brier")),
+        roi_on_cost=roi_on_cost,
+        ev_per_10_trades=ev_per_10_trades,
+    )
+
+
+def _primary_model_card_split(
+    splits: list[Any],
+    *,
+    default_policy: str | None,
+) -> dict[str, Any] | None:
+    split_dicts = [split for split in splits if isinstance(split, dict)]
+    if not split_dicts:
+        return None
+    for split in split_dicts:
+        if split.get("role") == "test" and (
+            default_policy is None or split.get("policy") == default_policy
+        ):
+            return split
+    for split in split_dicts:
+        if split.get("role") == "test":
+            return split
+    return split_dicts[0]
+
+
+def _metric_value(metrics: dict[str, Any], metric_name: str) -> Any:
+    metric = metrics.get(metric_name)
+    if isinstance(metric, dict):
+        return metric.get("value")
+    return metric
+
+
+def _ev_per_10_trades(
+    *,
+    roi_on_cost: float | None,
+    total_cost: float | None,
+    total_pnl: float | None,
+    trade_count: int | None,
+) -> float | None:
+    if not trade_count:
+        return None
+    if roi_on_cost is not None and total_cost is not None:
+        return (roi_on_cost * total_cost / trade_count) * 10
+    if total_pnl is not None:
+        return (total_pnl / trade_count) * 10
+    return None
+
+
+def _model_sort_key(model: SavedModelMetadata) -> tuple[int, str, str]:
+    card_version = _optional_int(_dict(model.model_card or {}).get("model_version"))
+    version = card_version if card_version is not None else model.model_version
+    return (
+        version if version is not None else -1,
+        model.trained_at or "",
+        model.name,
+    )
 
 
 def _snapshot_from_summary(label: str, summary: object) -> SavedModelEvaluationSnapshot:

@@ -842,3 +842,70 @@ Review/results:
 - Latest-30 ECE: `0.055070`, 95% CI `[0.041354, 0.110668]`; market ECE `0.058474`.
 - Latest-30 log loss: `0.487541`, 95% CI `[0.409582, 0.560559]`; market log loss `0.490595`.
 - Full walk-forward is included as a secondary backtest split with `244` events, `3,172` markets, `267` trades, and ROI `12.9636%`.
+
+## Model Card Workstation Redesign
+
+### Goal
+
+Refocus the web app around the three workflows that matter now: current active markets grouped by event, bot trading/decision history, and a central model overview with full model-card stats plus historical/current scoring tools.
+
+### Approved Design
+
+- Replace the left model picker with a top-nav model dropdown that previews each model using `artifacts/model-card.json` when present.
+- Sort models newest first using model version, trained timestamp, then name.
+- Compute dropdown preview metrics from the primary test split: trade percent = `trade_count / market_count`, Brier = `metrics.brier`, and EV per 10 trades = `(roi_on_cost * total_cost / trade_count) * 10`.
+- Use fallback legacy metadata when a model does not yet have a model card.
+- Restructure the app into three nav pages:
+  - Current Markets: primary page, grouped by `event_ticker`, with model probability, bid, ask, spread, and EV/contract.
+  - Trading History: cached bot decision history from poll snapshots/trade candidates, ready for future real execution fills.
+  - Model Overview: full model-card/stat view plus historical/sample/current-market model testing controls.
+- Make the visual system more boxy and less glowy: tighter radii, stronger hairline borders, fewer blooms, denser market tables.
+- Use an IBM Plex Sans / IBM Plex Mono font pairing via local font packages.
+
+### Implementation Tasks
+
+- [x] Add model-card parsing to saved-model metadata and API responses.
+- [x] Add computed selector preview fields and newest-first model sorting.
+- [x] Add poll-history/trading-decision endpoint.
+- [x] Add frontend types/API helpers for model cards and history.
+- [x] Rebuild top navigation with model dropdown and page tabs.
+- [x] Add Current Markets page grouped by event.
+- [x] Add Trading History page backed by cached poll history.
+- [x] Add Model Overview page with full model-card stats and scoring/test controls.
+- [x] Apply boxier IBM Plex visual system.
+
+### Verification
+
+- `python -m pytest`: 118 passed.
+- `python -m ruff check src tests`: All checks passed.
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- IDE diagnostics: no linter errors found for edited backend/frontend areas.
+- Browser smoke test:
+  - Current Markets rendered the latest cached poll (`71` markets across `5` events).
+  - Model picker sorted `kalorie-v3` first and displayed trade percent `9.21%`, Brier `0.1623`, and EV/10 `+1.6857`.
+  - Trading History rendered cached poll decision history.
+  - Model Overview rendered the V3 model card, caveats, evaluation splits, scoring controls, and current-market test table.
+  - Selecting a legacy model falls back to legacy metadata with empty card-preview fields.
+- Code-review follow-up fixed zero-trade preview math, aligned default poller model selection with newest-first sorting, and added a raw full-card JSON disclosure to Model Overview.
+
+## Stack Startup Scripts
+
+### Goal
+
+Add Windows PowerShell and POSIX shell entrypoints that start the local Kalorie2 development stack and cleanly tear down every child process on Ctrl+C or script exit.
+
+### Plan
+
+- [x] Create `start-stack.ps1` at the `kalorie2/` root.
+- [x] Create `start-stack.sh` at the `kalorie2/` root.
+- [x] Start the FastAPI server on `127.0.0.1:8000`.
+- [x] Start the Vite dev server on `127.0.0.1:5173` with a strict port.
+- [x] Start `kalorie2-market-poller loop` equivalent by default so current-market and history pages refresh.
+- [x] Provide options to change ports/model/poll interval and skip the poller for UI/API-only development.
+- [x] Trap Ctrl+C / termination and recursively stop all child process trees created by the script.
+
+### Verification
+
+- PowerShell parser accepted `start-stack.ps1`.
+- Bash parser accepted `start-stack.sh`.
+- Fixed Bash line endings to LF so POSIX shells can parse the script.
