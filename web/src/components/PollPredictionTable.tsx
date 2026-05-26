@@ -12,46 +12,59 @@ export function PollPredictionTable({ rows, emptyMessage }: PollPredictionTableP
   const orderedRows = [...rows].sort((left, right) => Math.abs(right.edge) - Math.abs(left.edge))
 
   return (
-    <div className="overflow-hidden rounded-2xl border border-line/70">
-      <table className="w-full border-collapse text-left text-sm">
-        <thead className="bg-panelStrong/90 text-[10px] uppercase tracking-[0.2em] text-muted">
+    <div className="overflow-x-auto rounded-xl border border-line bg-background/45">
+      <table className="w-full min-w-[1120px] border-collapse text-left text-xs">
+        <thead className="border-b border-line bg-panelStrong/90 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
           <tr>
             <Th>Market</Th>
             <Th>Phrase</Th>
-            <Th>Model</Th>
-            <Th>Market</Th>
-            <Th>Residual</Th>
-            <Th>Bid / Ask</Th>
+            <Th numeric>Model</Th>
+            <Th numeric>Market</Th>
+            <Th numeric>Residual</Th>
+            <Th numeric>Bid / Ask</Th>
             <Th>Side</Th>
-            <Th>Edge</Th>
-            <Th>Cost</Th>
-            <Th>Vol</Th>
+            <Th numeric>Edge</Th>
+            <Th numeric>Cost</Th>
+            <Th numeric>Vol</Th>
           </tr>
         </thead>
         <tbody className="divide-y divide-line/50">
           {orderedRows.length === 0 ? (
             <tr>
-                <td colSpan={10} className="px-4 py-10 text-center text-muted">
+              <td colSpan={10} className="px-4 py-10 text-center text-muted">
                 {emptyMessage}
               </td>
             </tr>
           ) : (
             orderedRows.map((row) => (
-              <tr key={`${row.market_ticker}-${row.side}`} className="bg-background/25">
+              <tr
+                key={`${row.market_ticker}-${row.side}`}
+                className="bg-background/20 transition hover:bg-panelStrong/45"
+              >
                 <Td strong>{row.market_ticker}</Td>
                 <Td>{row.target_phrase}</Td>
-                <Td tone="text-cyan">{formatProbability(row.model_probability)}</Td>
-                <Td>{formatProbability(row.market_probability)}</Td>
+                <Td tone="text-cyan" numeric>
+                  {formatProbability(row.model_probability)}
+                </Td>
+                <Td numeric>{formatProbability(row.market_probability)}</Td>
                 <Td tone={row.residual_delta >= 0 ? 'text-green' : 'text-red'}>
                   {formatSigned(row.residual_delta)}
                 </Td>
-                <Td>
+                <Td numeric>
                   {formatProbability(row.yes_bid)} / {formatProbability(row.yes_ask)}
                 </Td>
-                <Td tone={sideTone(row.side)}>{row.side}</Td>
-                <Td tone={row.edge > 0 ? 'text-green' : 'text-muted'}>{formatSigned(row.edge)}</Td>
-                <Td>{formatProbability(row.cost)}</Td>
-                <Td>{formatInteger(row.volume)}</Td>
+                <Td>
+                  <span
+                    className={`rounded-full border px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] ${sideTone(row.side)}`}
+                  >
+                    {row.side}
+                  </span>
+                </Td>
+                <Td tone={row.edge > 0 ? 'text-green' : 'text-muted'} numeric>
+                  {formatSigned(row.edge)}
+                </Td>
+                <Td numeric>{formatProbability(row.cost)}</Td>
+                <Td numeric>{formatInteger(row.volume)}</Td>
               </tr>
             ))
           )}
@@ -65,20 +78,27 @@ interface CellProps {
   readonly children: ReactNode
   readonly tone?: string
   readonly strong?: boolean
+  readonly numeric?: boolean
 }
 
-function Th({ children }: CellProps) {
-  return <th className="px-4 py-3 font-semibold">{children}</th>
+function Th({ children, numeric = false }: CellProps) {
+  return <th className={`px-3 py-3 font-semibold ${numeric ? 'text-right' : ''}`}>{children}</th>
 }
 
-function Td({ children, tone = 'text-foreground', strong = false }: CellProps) {
+function Td({ children, tone = 'text-foreground', strong = false, numeric = false }: CellProps) {
   return (
-    <td className={`px-4 py-4 font-mono ${tone} ${strong ? 'font-semibold' : ''}`}>{children}</td>
+    <td
+      className={`px-3 py-3 font-mono ${numeric ? 'text-right' : ''} ${tone} ${
+        strong ? 'font-semibold' : ''
+      }`}
+    >
+      {children}
+    </td>
   )
 }
 
 function sideTone(side: string): string {
-  if (side === 'YES') return 'text-green'
-  if (side === 'NO') return 'text-red'
-  return 'text-muted'
+  if (side === 'YES') return 'border-green/30 bg-green/10 text-green'
+  if (side === 'NO') return 'border-red/30 bg-red/10 text-red'
+  return 'border-line bg-panel text-muted'
 }

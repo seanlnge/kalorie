@@ -27,13 +27,25 @@ function App() {
         selectedModelName={workstation.selectedModelName}
         onSelect={workstation.selectModel}
       />
-      <div className="min-w-0 flex-1">
-        <TopStatusBar selectedModel={workstation.selectedModel} />
-        <main className="space-y-5 p-6">
-          <nav className="flex w-fit rounded-2xl border border-line/70 bg-panel/80 p-1">
-            <ViewButton active={activeView === 'workstation'} label="Workbench" onClick={() => setActiveView('workstation')} />
-            <ViewButton active={activeView === 'live'} label="Live Model" onClick={() => setActiveView('live')} />
-            <ViewButton active={activeView === 'trades'} label="Trades" onClick={() => setActiveView('trades')} />
+      <div className="min-w-0 flex-1 bg-background/72">
+        <TopStatusBar selectedModel={workstation.selectedModel} pollSnapshot={pollSnapshot.snapshot} />
+        <main className="space-y-4 p-4">
+          <nav className="flex w-fit rounded-xl border border-line bg-panel/80 p-1 shadow-terminal">
+            <ViewButton
+              active={activeView === 'workstation'}
+              label="Workbench"
+              onClick={() => setActiveView('workstation')}
+            />
+            <ViewButton
+              active={activeView === 'live'}
+              label="Live Model"
+              onClick={() => setActiveView('live')}
+            />
+            <ViewButton
+              active={activeView === 'trades'}
+              label="Trades"
+              onClick={() => setActiveView('trades')}
+            />
           </nav>
           {workstation.loading ? (
             <SystemNotice tone="cyan" message="Scanning top-level models/* for valid saved bundles..." />
@@ -43,10 +55,13 @@ function App() {
 
           {activeView === 'workstation' ? (
             <>
-              <section className="rounded-[2rem] border border-line/70 bg-panelStrong/50 p-6 shadow-terminal">
-                <div className="max-w-5xl">
-                  <p className="text-xs uppercase tracking-[0.32em] text-cyan">Quant research terminal</p>
-                  <h2 className="mt-2 font-display text-4xl font-semibold tracking-tight">
+              <section className="relative overflow-hidden rounded-2xl border border-line bg-panelStrong/70 p-5 shadow-terminal">
+                <div className="absolute inset-y-0 right-0 w-1/2 bg-[radial-gradient(circle_at_top_right,rgb(54_216_255/0.12),transparent_22rem)]" />
+                <div className="relative max-w-5xl">
+                  <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-cyan">
+                    Quant research terminal
+                  </p>
+                  <h2 className="mt-2 font-display text-3xl font-bold tracking-tight">
                     Saved-model scoring for Kalshi earnings mention markets.
                   </h2>
                   <p className="mt-4 max-w-3xl text-sm leading-6 text-muted">
@@ -97,9 +112,10 @@ interface SystemNoticeProps {
 }
 
 function SystemNotice({ tone, message }: SystemNoticeProps) {
-  const toneClass = tone === 'cyan' ? 'border-cyan/30 bg-cyan/10 text-cyan' : 'border-amber/30 bg-amber/10 text-amber'
+  const toneClass =
+    tone === 'cyan' ? 'border-cyan/30 bg-cyan/10 text-cyan' : 'border-amber/30 bg-amber/10 text-amber'
   return (
-    <div className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm ${toneClass}`}>
+    <div className={`flex items-center gap-2 rounded-xl border px-4 py-3 text-sm ${toneClass}`}>
       <AlertTriangle size={16} />
       {message}
     </div>
@@ -118,8 +134,10 @@ function ViewButton({ active, label, onClick }: ViewButtonProps) {
       type="button"
       onClick={onClick}
       className={[
-        'rounded-xl px-5 py-2 text-sm font-semibold transition',
-        active ? 'bg-cyan text-background' : 'text-muted hover:text-foreground',
+        'rounded-lg border-t px-5 py-2 font-mono text-xs uppercase tracking-[0.16em] transition',
+        active
+          ? 'border-cyan/70 bg-panelStrong text-cyan shadow-bloom'
+          : 'border-transparent text-muted hover:text-foreground',
       ].join(' ')}
     >
       {label}

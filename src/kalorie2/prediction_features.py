@@ -42,17 +42,87 @@ _GENERIC_BUSINESS_TERMS = frozenset(
     }
 )
 
+_SEMANTIC_BUCKETS = {
+    "macro": (
+        "consumer demand",
+        "currency",
+        "fx",
+        "inflation",
+        "interest rates",
+        "macro",
+        "macroeconomics",
+        "oil",
+        "tariff",
+    ),
+    "regulatory": (
+        "compliance",
+        "policy",
+        "regulation",
+        "regulatory",
+        "tariff",
+        "tax",
+        "trade policy",
+    ),
+    "operations": (
+        "inventory",
+        "logistics",
+        "membership",
+        "membership fee",
+        "operations",
+        "stores",
+        "supply chain",
+    ),
+    "product": (
+        "brand",
+        "customer",
+        "launch",
+        "product",
+        "service",
+    ),
+    "labor": (
+        "compensation",
+        "employee",
+        "hiring",
+        "labor",
+        "wage",
+        "workforce",
+    ),
+    "technology": (
+        "ai",
+        "artificial intelligence",
+        "automation",
+        "cloud",
+        "data",
+        "software",
+        "technology",
+    ),
+    "finance": (
+        "buyback",
+        "cash flow",
+        "debt",
+        "dividend",
+        "finance",
+        "margin",
+        "revenue",
+    ),
+    "generic_business": tuple(sorted(_GENERIC_BUSINESS_TERMS)),
+}
+
 
 def extract_market_features(row: PredictionInputRow) -> dict[str, float]:
     mid = float(row.preclose_yes_mid)
     bid = float(row.preclose_yes_bid)
     ask = float(row.preclose_yes_ask)
+    spread = max(0.0, ask - bid)
     return {
         "market_yes_bid": bid,
         "market_yes_ask": ask,
         "market_yes_mid": mid,
         "market_mid_logit": _safe_logit(mid),
-        "market_spread": max(0.0, ask - bid),
+        "market_spread": spread,
+        "market_spread_share_of_mid": spread / mid if mid > 0.0 else 0.0,
+        "market_no_bid": max(0.0, 1.0 - ask),
+        "market_no_ask": min(1.0, 1.0 - bid),
         "market_bid_present": 1.0 if bid > 0.0 else 0.0,
         "market_ask_present": 1.0 if ask > 0.0 else 0.0,
         "snapshot_staleness_seconds": float(row.snapshot_staleness_seconds),
@@ -78,6 +148,30 @@ def extract_phrase_features(row: PredictionInputRow) -> dict[str, float]:
         if normalized_tokens & _GENERIC_BUSINESS_TERMS
         else 0.0,
         "phrase_is_entity_like": 1.0 if _looks_entity_like(row.word_said) else 0.0,
+        **_semantic_bucket_features(base_phrase),
+    }
+
+
+def extract_resolution_features(row: PredictionInputRow) -> dict[str, float]:
+    base_phrase, count_threshold = _split_min_count(row.normalized_word_said or row.word_said)
+    options = _word_options(base_phrase)
+    option_tokens = [set(_normalized_tokens(option)) for option in options]
+    unique_tokens = set().union(*option_tokens) if option_tokens else set()
+    average_option_tokens = (
+        sum(len(tokens) for tokens in option_tokens) / len(option_tokens)
+        if option_tokens
+        else 0.0
+    )
+    breadth_denominator = max(1.0, average_option_tokens)
+    return {
+        "resolution_option_count": float(len(options)),
+        "resolution_requires_count_threshold": 1.0 if count_threshold > 1 else 0.0,
+        "resolution_minimum_count": float(count_threshold),
+        "resolution_has_alternatives": 1.0 if len(options) > 1 else 0.0,
+        "resolution_phrase_breadth_score": max(
+            0.0,
+            (len(unique_tokens) / breadth_denominator) - 1.0,
+        ),
     }
 
 
@@ -121,6 +215,12 @@ def extract_web_evidence_features(
             "web_evidence_target_match_share": 0.0,
             "web_evidence_strength_mean": 0.0,
             "web_evidence_strength_sum": 0.0,
+            "web_evidence_relevance_mean": 0.0,
+            "web_evidence_relevance_max": 0.0,
+            "web_evidence_high_relevance_count": 0.0,
+            "web_evidence_support_count": 0.0,
+            "web_evidence_against_count": 0.0,
+            "web_evidence_neutral_count": 0.0,
             "web_evidence_recency_min_hours": 0.0,
             "web_evidence_recency_mean_hours": 0.0,
             "web_evidence_source_company": 0.0,
@@ -144,6 +244,7 @@ def build_feature_row(
     features = {
         **extract_market_features(row),
         **extract_phrase_features(row),
+        **extract_resolution_features(row),
         **extract_scenario_features(row, catalog),
         **extract_web_evidence_features(row, web_evidence),
     }
@@ -204,6 +305,19 @@ def _token_overlap(left: str, right: str) -> float:
     if not left_tokens or not right_tokens:
         return 0.0
     return len(left_tokens & right_tokens) / math.sqrt(len(left_tokens) * len(right_tokens))
+
+
+def _semantic_bucket_features(phrase: str) -> dict[str, float]:
+    return {
+        f"phrase_semantic_{bucket}_score": _semantic_bucket_score(phrase, anchors)
+        for bucket, anchors in _SEMANTIC_BUCKETS.items()
+    }
+
+
+def _semantic_bucket_score(phrase: str, anchors: tuple[str, ...]) -> float:
+    if not anchors:
+        return 0.0
+    return max(_token_overlap(phrase, anchor) for anchor in anchors)
 
 
 def _phrase_tokens(phrase: str) -> list[str]:

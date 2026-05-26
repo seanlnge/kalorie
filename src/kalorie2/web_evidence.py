@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +20,8 @@ class WebEvidenceItem(WebEvidenceModel):
     snippet: str = Field(min_length=1)
     target_phrases: list[str] = Field(default_factory=list)
     evidence_strength: float = Field(ge=0.0, le=1.0)
+    relevance_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    evidence_direction: Literal["support", "against", "neutral"] = "neutral"
 
     @field_validator("target_phrases")
     @classmethod
@@ -82,10 +84,14 @@ class WebEvidencePacket(WebEvidenceModel):
         matching = [
             item
             for item in retained
-            if normalized_target in item.target_phrases
-            or _token_overlap(normalized_target, item.snippet) > 0.0
+            if item.relevance_score >= 0.35
+            and (
+                normalized_target in item.target_phrases
+                or _token_overlap(normalized_target, item.snippet) > 0.0
+            )
         ]
         matching_strengths = [item.evidence_strength for item in matching]
+        matching_relevances = [item.relevance_score for item in matching]
         recency_hours = [
             (effective_cutoff - item.published_at).total_seconds() / 3600.0
             for item in matching
@@ -111,6 +117,24 @@ class WebEvidencePacket(WebEvidenceModel):
                 else 0.0
             ),
             "web_evidence_strength_sum": sum(matching_strengths),
+            "web_evidence_relevance_mean": (
+                sum(matching_relevances) / len(matching_relevances)
+                if matching_relevances
+                else 0.0
+            ),
+            "web_evidence_relevance_max": max(matching_relevances, default=0.0),
+            "web_evidence_high_relevance_count": float(
+                sum(1 for item in matching if item.relevance_score >= 0.75)
+            ),
+            "web_evidence_support_count": float(
+                sum(1 for item in matching if item.evidence_direction == "support")
+            ),
+            "web_evidence_against_count": float(
+                sum(1 for item in matching if item.evidence_direction == "against")
+            ),
+            "web_evidence_neutral_count": float(
+                sum(1 for item in matching if item.evidence_direction == "neutral")
+            ),
             "web_evidence_recency_min_hours": min(recency_hours, default=0.0),
             "web_evidence_recency_mean_hours": (
                 sum(recency_hours) / len(recency_hours) if recency_hours else 0.0
@@ -129,10 +153,14 @@ def build_web_evidence_prompt(
         "target_phrases": target_phrases,
         "instructions": [
             "Find company-specific web/news evidence published before or at the cutoff.",
+            "Only include sources worth using as forecasting evidence; skip generic results "
+            "that do not materially inform any target phrase.",
             "Do not use earnings-call transcripts, call audio, post-call recaps, "
             "or resolution pages.",
             "Prefer company releases, reputable financial news, SEC filings, and analyst previews.",
             "If a source publication time is unavailable, include published_at as null.",
+            "Set relevance_score to how specifically the source informs the target phrase, "
+            "and evidence_direction to support, against, or neutral.",
         ],
         "required_schema": _web_evidence_schema(),
     }
@@ -193,6 +221,15 @@ def _web_evidence_schema() -> dict[str, Any]:
                             "minimum": 0,
                             "maximum": 1,
                         },
+                        "relevance_score": {
+                            "type": "number",
+                            "minimum": 0,
+                            "maximum": 1,
+                        },
+                        "evidence_direction": {
+                            "type": "string",
+                            "enum": ["support", "against", "neutral"],
+                        },
                     },
                     "required": [
                         "title",
@@ -202,6 +239,8 @@ def _web_evidence_schema() -> dict[str, Any]:
                         "snippet",
                         "target_phrases",
                         "evidence_strength",
+                        "relevance_score",
+                        "evidence_direction",
                     ],
                     "additionalProperties": False,
                 },

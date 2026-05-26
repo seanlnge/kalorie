@@ -9,6 +9,7 @@ from kalorie2.prediction_features import (
     build_feature_row,
     extract_market_features,
     extract_phrase_features,
+    extract_resolution_features,
     extract_scenario_features,
     extract_web_evidence_features,
 )
@@ -97,6 +98,9 @@ def test_extract_market_features_includes_logit_spread_and_staleness():
     assert features["snapshot_staleness_hours"] == pytest.approx(290 / 3600)
     assert features["market_bid_present"] == 1.0
     assert features["market_ask_present"] == 1.0
+    assert features["market_spread_share_of_mid"] == pytest.approx(0.02 / 0.96)
+    assert features["market_no_bid"] == pytest.approx(0.03)
+    assert features["market_no_ask"] == pytest.approx(0.05)
     assert "final_outcome" not in features
 
 
@@ -122,6 +126,42 @@ def test_extract_phrase_features_classifies_count_slash_macro_entity_and_generic
     assert entity_features["phrase_is_entity_like"] == 1.0
     assert generic_features["phrase_is_generic_business"] == 1.0
     assert generic_features["phrase_is_multiword"] == 1.0
+
+
+def test_extract_phrase_features_adds_semantic_bucket_scores():
+    tariff_features = extract_phrase_features(
+        _row(word_said="Tariff", normalized_word_said="tariff")
+    )
+    membership_features = extract_phrase_features(
+        _row(word_said="Membership Fee", normalized_word_said="membership fee")
+    )
+    ai_features = extract_phrase_features(_row(word_said="AI", normalized_word_said="ai"))
+
+    assert tariff_features["phrase_semantic_macro_score"] > 0.75
+    assert tariff_features["phrase_semantic_regulatory_score"] > 0.75
+    assert tariff_features["phrase_semantic_operations_score"] < 0.5
+    assert membership_features["phrase_semantic_operations_score"] > 0.5
+    assert membership_features["phrase_semantic_macro_score"] < 0.5
+    assert ai_features["phrase_semantic_technology_score"] > 0.75
+
+
+def test_extract_resolution_features_learns_variation_complexity_without_multiplier():
+    features = extract_resolution_features(
+        _row(
+            market_name=(
+                "What will Costco say during their next earnings call? - "
+                "Membership fee / subscription fees (2+ times)"
+            ),
+            word_said="Membership fee / subscription fees (2+ times)",
+            normalized_word_said="membership fee / subscription fees (2+ times)",
+        )
+    )
+
+    assert features["resolution_option_count"] == 2.0
+    assert features["resolution_requires_count_threshold"] == 1.0
+    assert features["resolution_minimum_count"] == 2.0
+    assert features["resolution_phrase_breadth_score"] > 0.0
+    assert "resolution_probability_multiplier" not in features
 
 
 def test_extract_scenario_features_scores_target_and_topic_overlap():
@@ -159,5 +199,7 @@ def test_build_feature_row_and_matrix_exclude_label_fields():
     assert "settlement_ts" not in feature_row
     assert feature_row["market_yes_mid"] == 0.96
     assert feature_row["phrase_is_macro"] == 1.0
+    assert feature_row["phrase_semantic_macro_score"] > 0.75
+    assert feature_row["resolution_option_count"] == 1.0
     assert feature_row["scenario_available"] == 1.0
     assert feature_row["web_evidence_available"] == 1.0

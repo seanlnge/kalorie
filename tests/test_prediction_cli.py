@@ -167,6 +167,108 @@ def test_evaluate_cli_loads_web_evidence_packets(tmp_path: Path):
     assert feature_matrix["feature_rows"][1]["web_evidence_available"] == 1.0
 
 
+def test_evaluate_cli_can_run_no_side_residual_training(tmp_path: Path):
+    input_csv = tmp_path / "markets.csv"
+    out_dir = tmp_path / "artifacts" / "prediction-engine" / "unit"
+    _write_market_csv(input_csv)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "evaluate",
+            str(input_csv),
+            "--run-id",
+            "unit",
+            "--out-dir",
+            str(out_dir),
+            "--min-training-events",
+            "1",
+            "--epochs",
+            "5",
+            "--target-side",
+            "no",
+            "--positive-label-weight",
+            "2.0",
+        ],
+    )
+
+    model_summary = json.loads((out_dir / "model-summary.json").read_text(encoding="utf-8"))
+    predictions = list(csv.DictReader((out_dir / "predictions.csv").open(encoding="utf-8")))
+
+    assert result.exit_code == 0
+    assert model_summary["target_side"] == "no"
+    assert model_summary["positive_label_weight"] == 2.0
+    assert "target_side:no" in predictions[0]["reasons"]
+
+
+def test_evaluate_cli_can_ablate_named_feature_groups(tmp_path: Path):
+    input_csv = tmp_path / "markets.csv"
+    out_dir = tmp_path / "artifacts" / "prediction-engine" / "unit"
+    _write_market_csv(input_csv)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "evaluate",
+            str(input_csv),
+            "--run-id",
+            "unit",
+            "--out-dir",
+            str(out_dir),
+            "--min-training-events",
+            "1",
+            "--epochs",
+            "5",
+            "--feature-ablation-group",
+            "semantic",
+        ],
+    )
+
+    model_summary = json.loads((out_dir / "model-summary.json").read_text(encoding="utf-8"))
+    feature_matrix = json.loads((out_dir / "feature-matrix.json").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert model_summary["feature_ablation_group"] == "semantic"
+    assert not any(
+        key.startswith("phrase_semantic_")
+        for key in feature_matrix["feature_rows"][0]
+    )
+
+
+def test_backtest_cli_can_run_no_side_residual_training(tmp_path: Path):
+    input_csv = tmp_path / "markets.csv"
+    out_dir = tmp_path / "artifacts" / "prediction-engine" / "unit-backtest"
+    _write_market_csv(input_csv)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "backtest",
+            str(input_csv),
+            "--run-id",
+            "unit-backtest",
+            "--out-dir",
+            str(out_dir),
+            "--min-training-events",
+            "1",
+            "--epochs",
+            "5",
+            "--target-side",
+            "no",
+            "--positive-label-weight",
+            "2.0",
+            "--trade-side",
+            "no_only",
+        ],
+    )
+
+    report = json.loads((out_dir / "backtest.json").read_text(encoding="utf-8"))
+
+    assert result.exit_code == 0
+    assert "summary" in report
+    assert "trades" in report
+
+
 def test_evaluate_cli_rejects_generated_outputs_in_full_directory(tmp_path: Path):
     input_csv = tmp_path / "markets.csv"
     _write_market_csv(input_csv)
@@ -649,15 +751,28 @@ def test_sweep_cli_writes_ranked_local_results(tmp_path: Path):
             "--residual-clip-grid",
             "1.0",
             "--margin-grid",
-            "0",
+            "0,0.05",
             "--trade-side-grid",
             "no_only",
+            "--target-side-grid",
+            "no",
+            "--positive-label-weight-grid",
+            "1.0,2.0",
+            "--feature-ablation-group-grid",
+            "none,semantic",
         ],
     )
 
     summary = json.loads((out_dir / "sweep-summary.json").read_text(encoding="utf-8"))
 
     assert result.exit_code == 0
-    assert len(summary["results"]) == 2
+    rows = list(csv.DictReader((out_dir / "sweep-results.csv").open(encoding="utf-8")))
+
+    assert len(summary["results"]) == 16
     assert summary["results"][0]["config"]["trade_side"] == "no_only"
+    assert {result["config"]["target_side"] for result in summary["results"]} == {"no"}
+    assert {row["target_side"] for row in rows} == {"no"}
+    assert {row["positive_label_weight"] for row in rows} == {"1.0", "2.0"}
+    assert {row["margin"] for row in rows} == {"0.0", "0.05"}
+    assert {row["feature_ablation_group"] for row in rows} == {"none", "semantic"}
     assert (out_dir / "sweep-results.csv").exists()

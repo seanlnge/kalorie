@@ -724,3 +724,96 @@ Next improvement ideas:
 - Collect a small MixMCP packet sample with `gpt-5.4-mini` under explicit cost caps, then test learned alpha before scaling.
 - Build a latest-30 rolling live-watch workflow: when new markets appear, collect evidence, score NO-only, and save a pre-trade decision log before settlement.
 - Add fee/slippage modeling so ROI is closer to executable Kalshi returns.
+
+## Kalorie V3 Predictive Engine Features
+
+Goal: implement v3 predictive features in `kalorie2/src` while keeping the frozen `models/kalorie-v2/` bundle untouched. V3 should improve unsettled-market signal quality without changing execution, live ledger, sizing, or market-open workflow yet.
+
+Plan:
+
+- [x] Keep `models/kalorie-v2/` read-only during this work.
+- [x] Add deterministic phrase semantic bucket features for macro, regulatory, operations, product, labor, technology, finance, and generic-business concepts.
+- [x] Add learned resolution/variation features, not probability multipliers.
+- [x] Add stricter web-evidence relevance fields and features so low-value web-search results can be measured separately.
+- [x] Add NO-side residual training support so a v3 NO-only model can be trained without optimizing the same residual target as YES/all-side experiments.
+- [x] Add transcript web-search discovery prompt/schema support that finds transcript source candidates, while deterministic code remains responsible for cached transcript matching.
+- [x] Run focused tests and verify `models/kalorie-v2/` remains unchanged.
+
+Review/results:
+
+- Added explicit `--target-side` and `--positive-label-weight` controls for evaluation/backtest runs, plus sweep grids for both values.
+- Kept `models/kalorie-v2/` outside the edited `kalorie2/` tree and did not modify the frozen saved-model bundle.
+- Verification: `python -m pytest -q` passed with `111` tests.
+- Verification: `python -m ruff check` on edited source/tests passed.
+- IDE diagnostics reported no linter errors for edited files.
+
+V3 no-side training run:
+
+- Training data rebuild: not needed. Reused `artifacts/full/mention-markets-historical-20260523.csv` and recomputed v3 features from existing rows plus `artifacts/prediction-engine/web-evidence-full-20260525/web-evidence`.
+- Run directory: `artifacts/prediction-engine/v3-no-side-20260526/`.
+- Config: `min_training_events=20`, `epochs=5`, `learning_rate=0.05`, `l2=0.001`, `residual_clip=2.0`, `target_side=no`, `positive_label_weight=2.0`, NO-only backtest margin `0`.
+- Evaluation: `3,172` predictions, Brier `0.122321` vs market Brier `0.123966`.
+- Calibration: ECE `0.031914` vs market ECE `0.044546`.
+- NO-only backtest: `806` trades, total cost `438.99`, PnL `52.01`, ROI `11.8477%`.
+- 95% event-bootstrap ROI CI: full walk-forward `[5.8648%, 17.7598%]`; latest-30 events `[0.7873%, 31.8356%]`.
+- Metrics artifact: `artifacts/prediction-engine/v3-no-side-20260526/v3-metrics-ci-report.json`.
+
+## Kalorie V3 Ablation And Margin Calibration
+
+Goal: add reproducible feature ablation and margin calibration so v3 can optimize ROI without relying only on the raw `target_side=no` model output.
+
+Plan:
+
+- [x] Add CLI support for named feature ablation groups during evaluation/backtest/sweep.
+- [x] Add sweep output fields that preserve the selected ablation group and margin so ROI tuning is auditable.
+- [x] Run a v3 grid across all-side/NO-only policies, margins, positive-label weights, and feature ablation groups.
+- [x] Select the best ROI configuration with enough trade count to be meaningful, then rerun/report it with Brier, ECE, and 95% event-bootstrap CI.
+- [x] Regenerate the canvas so it shows raw v3, optimized v3, v2, all-side, and NO-only results.
+
+Review/results:
+
+- Added `--feature-ablation-group` for `evaluate`/`backtest` and `--feature-ablation-group-grid` for `sweep`.
+- Sweep artifact: `artifacts/prediction-engine/v3-ablation-margin-20260526/sweep-summary.json`.
+- Optimized prediction run: `artifacts/prediction-engine/v3-optimized-roi-20260526/`.
+- Optimized report: `artifacts/prediction-engine/v3-ablation-margin-20260526/v3-ablation-margin-report.json`.
+- Best full-walk-forward NO-only config was `feature_ablation_group=resolution`, `margin=0.03`, `target_side=no`, `positive_label_weight=2.0`.
+- Full NO-only ROI improved from raw v3 `11.85%` to optimized `21.20%`, with 95% event-bootstrap ROI CI `[3.20%, 39.82%]`.
+- Latest-30 optimized NO-only ROI was `29.03%`, but only 10 trades and CI crossed zero, so this should be treated as a selective-policy signal rather than a final deployment guarantee.
+
+## Saved Model Bundle: `kalorie-v3-unoptimized`
+
+Goal: save the raw V3 no-side checkpoint before ablation and margin calibration as a selectable root-level saved model bundle.
+
+Plan/results:
+
+- [x] Created `models/kalorie-v3-unoptimized/`.
+- [x] Saved full-fit raw V3 weights in `models/kalorie-v3-unoptimized/artifacts/model.json`.
+- [x] Preserved the raw V3 feature schema, training manifest, evaluation reports, historical CSV, and web-evidence packets.
+- [x] Added a runtime scorer at `models/kalorie-v3-unoptimized/runtime/model_runtime.py`.
+- [x] Verified runtime scoring with `python models/kalorie-v3-unoptimized/runtime/model_runtime.py --row-index 0`.
+- [x] Confirmed lints reported no errors for the new runtime file.
+
+Notes:
+
+- This bundle is intentionally unoptimized: `feature_ablation_group=none`, `default_margin=0.0`, `target_side=no`, `positive_label_weight=2.0`.
+- The optimized `feature_ablation_group=resolution`, `margin=0.03` policy is documented separately and is not baked into this bundle.
+
+## Saved Model Bundle: `kalorie-v3`
+
+Goal: save the balanced V3 checkpoint as the default V3 bundle, using resolution ablation and a `0.02` NO-only execution margin for better trade consistency than the peak-ROI `0.03` policy.
+
+Plan/results:
+
+- [x] Created `models/kalorie-v3/`.
+- [x] Fit saved runtime weights on all historical rows with `feature_ablation_group=resolution`, `target_side=no`, and `positive_label_weight=2.0`.
+- [x] Set default execution policy to `no_only` and default margin to `0.02`.
+- [x] Preserved historical CSV, web-evidence packets, feature schema, training manifest, and evaluation reports.
+- [x] Verified runtime scoring with `python models/kalorie-v3/runtime/model_runtime.py --row-index 0`.
+- [x] Verified saved-model registry discovery for `kalorie-v3`.
+- [x] Confirmed lints reported no errors for `models/kalorie-v3/runtime/model_runtime.py`.
+
+Validation snapshot:
+
+- Full NO-only margin `0.02`: `267` trades, total cost `146.95`, PnL `19.05`, ROI `12.9636%`.
+- Latest-30 NO-only margin `0.02`: `35` trades, total cost `20.10`, PnL `5.90`, ROI `29.3532%`.
+- Feature count after resolution ablation: `57`; nonzero saved weights: `49`.

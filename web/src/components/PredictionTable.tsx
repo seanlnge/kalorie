@@ -12,19 +12,21 @@ export function PredictionTable({ rows }: PredictionTableProps) {
   const orderedRows = [...rows].sort((left, right) => Math.abs(right.edge) - Math.abs(left.edge))
 
   return (
-    <section className="rounded-3xl border border-line/70 bg-panel/70 p-5">
+    <section className="rounded-2xl border border-line bg-panel/80 p-4 shadow-terminal">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <p className="text-xs uppercase tracking-[0.24em] text-muted">Predictions</p>
+          <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-muted">
+            Predictions
+          </p>
           <h2 className="font-display text-lg font-semibold">Contract-level model output</h2>
         </div>
         <span className="rounded-full border border-line/70 bg-background/60 px-3 py-1 font-mono text-xs text-muted">
           {orderedRows.length} rows
         </span>
       </div>
-      <div className="overflow-hidden rounded-2xl border border-line/70">
-        <table className="w-full border-collapse text-left text-sm">
-          <thead className="bg-panelStrong/90 text-[10px] uppercase tracking-[0.2em] text-muted">
+      <div className="overflow-x-auto rounded-xl border border-line bg-background/45">
+        <table className="w-full min-w-[920px] border-collapse text-left text-xs">
+          <thead className="border-b border-line bg-panelStrong/90 font-mono text-[9px] uppercase tracking-[0.2em] text-muted">
             <tr>
               <Th>Market</Th>
               <Th>Event</Th>
@@ -45,7 +47,10 @@ export function PredictionTable({ rows }: PredictionTableProps) {
               </tr>
             ) : (
               orderedRows.map((row) => (
-                <tr key={`${row.market_ticker}-${row.event_ticker}`} className="bg-background/25">
+                <tr
+                  key={`${row.market_ticker}-${row.event_ticker}`}
+                  className="bg-background/20 transition hover:bg-panelStrong/45"
+                >
                   <Td strong>{row.market_ticker}</Td>
                   <Td>{row.event_ticker}</Td>
                   <Td>{formatProbability(row.model_probability)}</Td>
@@ -75,12 +80,12 @@ interface CellProps {
 }
 
 function Th({ children }: CellProps) {
-  return <th className="px-4 py-3 font-semibold">{children}</th>
+  return <th className="px-3 py-3 font-semibold">{children}</th>
 }
 
 function Td({ children, tone = 'text-foreground', strong = false }: CellProps) {
   return (
-    <td className={`px-4 py-4 font-mono ${tone} ${strong ? 'font-semibold' : ''}`}>{children}</td>
+    <td className={`px-3 py-3 font-mono ${tone} ${strong ? 'font-semibold' : ''}`}>{children}</td>
   )
 }
 
@@ -98,7 +103,7 @@ function SideBadge({ side }: SideBadgeProps) {
 
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs font-semibold ${config.className}`}
+      className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] ${config.className}`}
     >
       {config.icon}
       {side}

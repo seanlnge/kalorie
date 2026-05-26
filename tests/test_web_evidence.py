@@ -173,6 +173,35 @@ def test_web_evidence_packet_features_include_richer_target_signal():
     assert features["web_evidence_source_company"] == 0.0
 
 
+def test_web_evidence_packet_features_separate_relevant_search_results():
+    payload = _packet_payload()
+    payload["items"][0]["relevance_score"] = 0.95
+    payload["items"][0]["evidence_direction"] = "support"
+    payload["items"].append(
+        {
+            "title": "Generic retail article",
+            "url": "https://example.com/generic-retail",
+            "source": "Example News",
+            "published_at": "2026-05-20T11:00:00Z",
+            "snippet": "A broad article about retail stocks with no tariff context.",
+            "target_phrases": ["tariff"],
+            "evidence_strength": 0.9,
+            "relevance_score": 0.2,
+            "evidence_direction": "neutral",
+        }
+    )
+    packet = WebEvidencePacket.model_validate(payload)
+
+    features = packet.features_for_target("tariff")
+
+    assert features["web_evidence_target_match_count"] == 1.0
+    assert features["web_evidence_high_relevance_count"] == 1.0
+    assert features["web_evidence_relevance_mean"] == 0.95
+    assert features["web_evidence_support_count"] == 1.0
+    assert features["web_evidence_neutral_count"] == 0.0
+    assert features["web_evidence_strength_sum"] == 0.8
+
+
 def test_web_evidence_packet_features_can_use_row_level_cutoff():
     payload = _packet_payload()
     payload["cutoff_time"] = "2026-05-21T12:00:00Z"
@@ -201,6 +230,8 @@ def test_build_web_evidence_prompt_includes_cutoff_and_warns_against_leakage():
     assert "2026-05-21T07:41:50Z" in prompt
     assert "published before or at the cutoff" in prompt
     assert "Do not use earnings-call transcripts" in prompt
+    assert "relevance_score" in prompt
+    assert "Only include sources worth using as forecasting evidence" in prompt
     assert "tariff" in prompt
 
 
@@ -215,6 +246,9 @@ def test_build_openai_web_search_payload_uses_responses_web_search_and_strict_sc
     assert payload["text"]["format"]["type"] == "json_schema"
     assert payload["text"]["format"]["strict"] is True
     assert payload["text"]["format"]["schema"]["additionalProperties"] is False
+    item_schema = payload["text"]["format"]["schema"]["properties"]["items"]["items"]
+    assert "relevance_score" in item_schema["properties"]
+    assert "evidence_direction" in item_schema["properties"]
 
 
 def test_web_evidence_item_rejects_strength_outside_probability_range():

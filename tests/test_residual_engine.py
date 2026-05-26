@@ -153,3 +153,45 @@ def test_training_handles_large_unscaled_feature_values_without_overflow():
     assert "snapshot_staleness_seconds" in model.feature_means
     assert "snapshot_staleness_seconds" in model.feature_scales
     assert Decimal("0") < prediction.probability < Decimal("1")
+
+
+def test_no_side_residual_training_optimizes_no_probability_without_yes_dilution():
+    rows = [
+        _row("EVENT1", close_offset_days=0, outcome="no", market_mid="0.80"),
+        _row("EVENT2", close_offset_days=1, outcome="no", market_mid="0.80"),
+        _row("EVENT3", close_offset_days=2, outcome="yes", market_mid="0.80"),
+    ]
+
+    no_model = fit_linear_residual_model(
+        rows,
+        [{"no_signal": 1.0}, {"no_signal": 1.0}, {"no_signal": -1.0}],
+        epochs=50,
+        learning_rate=0.1,
+        target_side="no",
+        positive_label_weight=2.0,
+    )
+    yes_model = fit_linear_residual_model(
+        rows,
+        [{"no_signal": 1.0}, {"no_signal": 1.0}, {"no_signal": -1.0}],
+        epochs=50,
+        learning_rate=0.1,
+        target_side="yes",
+    )
+
+    no_prediction = no_model.predict(
+        market_probability=0.80,
+        feature_values={"no_signal": 1.0},
+    )
+    yes_prediction = yes_model.predict(
+        market_probability=0.80,
+        feature_values={"no_signal": 1.0},
+    )
+
+    assert no_prediction.probability < Decimal("0.80")
+    assert "target_side:no" in no_prediction.reasons
+    assert no_model.target_side == "no"
+    assert no_model.positive_label_weight == 2.0
+    assert yes_model.target_side == "yes"
+    assert no_model.weights["no_signal"] > 0
+    assert yes_model.weights["no_signal"] < 0
+    assert "target_side:yes" in yes_prediction.reasons

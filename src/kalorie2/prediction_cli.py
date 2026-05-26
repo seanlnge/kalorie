@@ -40,6 +40,16 @@ _CANONICAL_SOURCE_FILES = {
     "mention-markets-historical-20260523.json",
 }
 
+_FEATURE_ABLATION_PREFIXES = {
+    "none": (),
+    "market": ("market_", "snapshot_"),
+    "phrase": ("phrase_",),
+    "semantic": ("phrase_semantic_",),
+    "resolution": ("resolution_",),
+    "scenario": ("scenario_",),
+    "web": ("web_evidence_",),
+}
+
 
 @dataclass(frozen=True)
 class WebEvidenceFetchResult:
@@ -327,6 +337,9 @@ def evaluate_command(
     learning_rate: Annotated[float, typer.Option(min=0.0)] = 0.05,
     l2: Annotated[float, typer.Option(min=0.0)] = 0.001,
     residual_clip: Annotated[float, typer.Option(min=0.01)] = 2.0,
+    target_side: Annotated[str, typer.Option()] = "yes",
+    positive_label_weight: Annotated[float, typer.Option(min=0.01)] = 1.0,
+    feature_ablation_group: Annotated[str, typer.Option()] = "none",
 ) -> None:
     rows, feature_rows, predictions = _predict_from_csv(
         input_csv,
@@ -340,6 +353,9 @@ def evaluate_command(
         learning_rate=learning_rate,
         l2=l2,
         residual_clip=residual_clip,
+        target_side=_validated_target_side(target_side),
+        positive_label_weight=positive_label_weight,
+        feature_ablation_group=_validated_feature_ablation_group(feature_ablation_group),
     )
     config = _run_config(run_id)
     _write_prediction_outputs(
@@ -354,6 +370,9 @@ def evaluate_command(
         learning_rate=learning_rate,
         l2=l2,
         residual_clip=residual_clip,
+        target_side=_validated_target_side(target_side),
+        positive_label_weight=positive_label_weight,
+        feature_ablation_group=_validated_feature_ablation_group(feature_ablation_group),
     )
     typer.echo(f"Predictions: {len(predictions)}")
 
@@ -377,6 +396,9 @@ def backtest_command(
     residual_clip: Annotated[float, typer.Option(min=0.01)] = 2.0,
     margin: Annotated[float, typer.Option(min=0.0)] = 0.0,
     trade_side: Annotated[str, typer.Option()] = "all",
+    target_side: Annotated[str, typer.Option()] = "yes",
+    positive_label_weight: Annotated[float, typer.Option(min=0.01)] = 1.0,
+    feature_ablation_group: Annotated[str, typer.Option()] = "none",
 ) -> None:
     rows, _, predictions = _predict_from_csv(
         input_csv,
@@ -390,6 +412,9 @@ def backtest_command(
         learning_rate=learning_rate,
         l2=l2,
         residual_clip=residual_clip,
+        target_side=_validated_target_side(target_side),
+        positive_label_weight=positive_label_weight,
+        feature_ablation_group=_validated_feature_ablation_group(feature_ablation_group),
     )
     config = _run_config(run_id)
     trades = _build_trades(rows, predictions, margin=margin, trade_side=trade_side)
@@ -424,6 +449,9 @@ def sweep_command(
     residual_clip_grid: Annotated[str, typer.Option()] = "0.5,1.0,2.0",
     margin_grid: Annotated[str, typer.Option()] = "0,0.005,0.01,0.02",
     trade_side_grid: Annotated[str, typer.Option()] = "all,no_only,yes_only",
+    target_side_grid: Annotated[str, typer.Option()] = "yes",
+    positive_label_weight_grid: Annotated[str, typer.Option()] = "1.0",
+    feature_ablation_group_grid: Annotated[str, typer.Option()] = "none",
 ) -> None:
     config = _run_config(run_id)
     results = []
@@ -431,40 +459,61 @@ def sweep_command(
         for learning_rate in _parse_float_grid(learning_rate_grid):
             for l2 in _parse_float_grid(l2_grid):
                 for residual_clip in _parse_float_grid(residual_clip_grid):
-                    rows, _, predictions = _predict_from_csv(
-                        input_csv,
-                        web_evidence_dir=web_evidence_dir,
-                        mixmcp_dir=mixmcp_dir,
-                        exclude_events_manifest=exclude_events_manifest,
-                        min_training_events=min_training_events,
-                        epochs=epochs,
-                        learning_rate=learning_rate,
-                        l2=l2,
-                        residual_clip=residual_clip,
-                    )
-                    evaluation = _summarize_predictions(rows, predictions)
-                    for margin in _parse_float_grid(margin_grid):
-                        for trade_side in _parse_str_grid(trade_side_grid):
-                            trades = _build_trades(
-                                rows,
-                                predictions,
-                                margin=margin,
-                                trade_side=trade_side,
+                    for target_side in _parse_str_grid(target_side_grid):
+                        validated_target_side = _validated_target_side(target_side)
+                        for feature_ablation_group in _parse_str_grid(
+                            feature_ablation_group_grid
+                        ):
+                            validated_ablation = _validated_feature_ablation_group(
+                                feature_ablation_group
                             )
-                            results.append(
-                                {
-                                    "config": {
-                                        "epochs": epochs,
-                                        "learning_rate": learning_rate,
-                                        "l2": l2,
-                                        "residual_clip": residual_clip,
-                                        "margin": margin,
-                                        "trade_side": trade_side,
-                                    },
-                                    "evaluation": evaluation,
-                                    "backtest": _summarize_trades(trades),
-                                }
-                            )
+                            for positive_label_weight in _parse_float_grid(
+                                positive_label_weight_grid
+                            ):
+                                rows, _, predictions = _predict_from_csv(
+                                    input_csv,
+                                    web_evidence_dir=web_evidence_dir,
+                                    mixmcp_dir=mixmcp_dir,
+                                    exclude_events_manifest=exclude_events_manifest,
+                                    min_training_events=min_training_events,
+                                    epochs=epochs,
+                                    learning_rate=learning_rate,
+                                    l2=l2,
+                                    residual_clip=residual_clip,
+                                    target_side=validated_target_side,
+                                    positive_label_weight=positive_label_weight,
+                                    feature_ablation_group=validated_ablation,
+                                )
+                                evaluation = _summarize_predictions(rows, predictions)
+                                for margin in _parse_float_grid(margin_grid):
+                                    for trade_side in _parse_str_grid(trade_side_grid):
+                                        trades = _build_trades(
+                                            rows,
+                                            predictions,
+                                            margin=margin,
+                                            trade_side=trade_side,
+                                        )
+                                        results.append(
+                                            {
+                                                "config": {
+                                                    "epochs": epochs,
+                                                    "learning_rate": learning_rate,
+                                                    "l2": l2,
+                                                    "residual_clip": residual_clip,
+                                                    "target_side": validated_target_side,
+                                                    "positive_label_weight": (
+                                                        positive_label_weight
+                                                    ),
+                                                    "feature_ablation_group": (
+                                                        validated_ablation
+                                                    ),
+                                                    "margin": margin,
+                                                    "trade_side": trade_side,
+                                                },
+                                                "evaluation": evaluation,
+                                                "backtest": _summarize_trades(trades),
+                                            }
+                                        )
     results = sorted(
         results,
         key=lambda row: (
@@ -522,6 +571,9 @@ def _predict_from_csv(
     learning_rate: float,
     l2: float = 0.001,
     residual_clip: float = 2.0,
+    target_side: str = "yes",
+    positive_label_weight: float = 1.0,
+    feature_ablation_group: str = "none",
 ) -> tuple[list[PredictionInputRow], list[dict[str, float]], list[ResidualPrediction]]:
     rows = _read_rows(input_csv)
     excluded_events = _load_excluded_events(exclude_events_manifest)
@@ -530,6 +582,7 @@ def _predict_from_csv(
     web_evidence_by_event = _load_web_evidence_packets(web_evidence_dir)
     mixmcp_by_event = _load_mixmcp_packets(mixmcp_dir)
     feature_rows = build_feature_matrix(rows, {}, web_evidence_by_event)
+    feature_rows = _apply_feature_ablation(feature_rows, feature_ablation_group)
     predictions = walk_forward_predictions(
         rows,
         feature_rows,
@@ -538,6 +591,8 @@ def _predict_from_csv(
         learning_rate=learning_rate,
         l2=l2,
         residual_clip=residual_clip,
+        target_side=_validated_target_side(target_side),
+        positive_label_weight=positive_label_weight,
     )
     predictions = apply_mixmcp_to_predictions(
         rows,
@@ -562,6 +617,9 @@ def _write_prediction_outputs(
     learning_rate: float,
     l2: float,
     residual_clip: float,
+    target_side: str,
+    positive_label_weight: float,
+    feature_ablation_group: str,
 ) -> None:
     _write_json_checked(
         out_dir / "run-config.json",
@@ -578,6 +636,9 @@ def _write_prediction_outputs(
             "learning_rate": learning_rate,
             "l2": l2,
             "residual_clip": residual_clip,
+            "target_side": target_side,
+            "positive_label_weight": positive_label_weight,
+            "feature_ablation_group": feature_ablation_group,
             "prediction_count": len(predictions),
             "scenario_catalog_count": 0,
         },
@@ -651,6 +712,37 @@ def _validated_mixmcp_alpha_mode(value: str) -> str:
     if value not in {"global", "side"}:
         raise ValueError("mixmcp alpha mode must be 'global' or 'side'")
     return value
+
+
+def _validated_target_side(value: str) -> str:
+    if value not in {"yes", "no"}:
+        raise ValueError("target side must be 'yes' or 'no'")
+    return value
+
+
+def _validated_feature_ablation_group(value: str) -> str:
+    if value not in _FEATURE_ABLATION_PREFIXES:
+        allowed = ", ".join(sorted(_FEATURE_ABLATION_PREFIXES))
+        raise ValueError(f"feature ablation group must be one of: {allowed}")
+    return value
+
+
+def _apply_feature_ablation(
+    feature_rows: list[dict[str, float]],
+    feature_ablation_group: str,
+) -> list[dict[str, float]]:
+    validated_group = _validated_feature_ablation_group(feature_ablation_group)
+    prefixes = _FEATURE_ABLATION_PREFIXES[validated_group]
+    if not prefixes:
+        return feature_rows
+    return [
+        {
+            key: value
+            for key, value in feature_row.items()
+            if not key.startswith(prefixes)
+        }
+        for feature_row in feature_rows
+    ]
 
 
 def _load_excluded_events(path: Path | None) -> set[str]:
@@ -871,6 +963,9 @@ def _write_sweep_csv_checked(
         "learning_rate",
         "l2",
         "residual_clip",
+        "target_side",
+        "positive_label_weight",
+        "feature_ablation_group",
         "margin",
         "trade_side",
         "prediction_count",
