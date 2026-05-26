@@ -127,8 +127,8 @@ try {
 
     if (-not $NoPoller) {
         $pollerArgs = @(
-            "-c",
-            "from kalorie2.market_poller import app; app()",
+            "-m",
+            "kalorie2.market_poller",
             "loop",
             "--interval-seconds",
             "$PollIntervalSeconds"

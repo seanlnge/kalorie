@@ -659,3 +659,7 @@ def _response_output_text(payload: dict[str, Any]) -> str:
             if isinstance(content.get("text"), str):
                 return content["text"]
     raise ValueError("OpenAI response did not include output text")
+
+
+if __name__ == "__main__":
+    app()

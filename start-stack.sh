@@ -245,7 +245,7 @@ start_process \
 
 if [[ "$NO_POLLER" -eq 0 ]]; then
   poller_args=(
-    "${PYTHON_CMD[@]}" -c 'from kalorie2.market_poller import app; app()'
+    "${PYTHON_CMD[@]}" -m kalorie2.market_poller
     loop
     --interval-seconds "$POLL_INTERVAL_SECONDS"
   )
