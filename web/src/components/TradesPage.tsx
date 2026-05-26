@@ -71,7 +71,7 @@ function TradeMetric({ label, value, tone = 'text-foreground' }: TradeMetricProp
   return (
     <div className="rounded-xl border border-line bg-panel/75 p-4 shadow-terminal">
       <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">{label}</p>
-      <p className={`mt-2 truncate font-mono text-xl font-semibold ${tone}`}>{value}</p>
+      <p className={`mt-2 break-all font-mono text-lg font-semibold leading-6 ${tone}`}>{value}</p>
     </div>
   )
 }

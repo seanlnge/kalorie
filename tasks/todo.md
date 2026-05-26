@@ -817,3 +817,28 @@ Validation snapshot:
 - Full NO-only margin `0.02`: `267` trades, total cost `146.95`, PnL `19.05`, ROI `12.9636%`.
 - Latest-30 NO-only margin `0.02`: `35` trades, total cost `20.10`, PnL `5.90`, ROI `29.3532%`.
 - Feature count after resolution ablation: `57`; nonzero saved weights: `49`.
+
+## Model Card Schema For `kalorie-v3`
+
+Goal: add a reusable model-card schema and concrete model card artifact that makes the latest-30 test split the primary validation view.
+
+Plan:
+
+- [x] Add a typed model-card schema with sections for model identity, training data, feature set, evaluation splits, metrics, confidence intervals, and caveats.
+- [x] Include latest-30 as the primary testing split with ROI, number of trades, Brier, ECE, log loss, and 95% CIs where available/computable.
+- [x] Include full walk-forward as secondary context so users can compare stability versus the recent test window.
+- [x] Generate `models/kalorie-v3/artifacts/model-card.schema.json`.
+- [x] Generate `models/kalorie-v3/artifacts/model-card.json`.
+- [x] Verify the generated card is parseable, schema-shaped, and includes the requested latest-30 fields.
+
+Review/results:
+
+- Schema module: `kalorie2/src/kalorie2/model_cards.py`.
+- Schema artifact: `models/kalorie-v3/artifacts/model-card.schema.json`.
+- Model card artifact: `models/kalorie-v3/artifacts/model-card.json`.
+- Latest-30 test split: `30` events, `380` markets, `35` trades at margin `0.02`.
+- Latest-30 ROI: `29.3532%`, 95% event-bootstrap CI `[11.3258%, 45.9867%]`.
+- Latest-30 Brier: `0.162254`, 95% CI `[0.132949, 0.190264]`; market Brier `0.163622`.
+- Latest-30 ECE: `0.055070`, 95% CI `[0.041354, 0.110668]`; market ECE `0.058474`.
+- Latest-30 log loss: `0.487541`, 95% CI `[0.409582, 0.560559]`; market log loss `0.490595`.
+- Full walk-forward is included as a secondary backtest split with `244` events, `3,172` markets, `267` trades, and ROI `12.9636%`.
