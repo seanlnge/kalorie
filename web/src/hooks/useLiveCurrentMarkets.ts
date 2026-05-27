@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 
 import { getCurrentMarkets } from '@/lib/api'
 import type { PollSnapshot, RiskPreset } from '@/lib/types'
@@ -10,6 +10,8 @@ export function useLiveCurrentMarkets(modelName: string | null, riskPreset: Risk
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [refreshNonce, setRefreshNonce] = useState(0)
+  const snapshotRef = useRef<PollSnapshot | null>(null)
+  const lastFetchRef = useRef<{ modelName: string; riskPresetId: string } | null>(null)
 
   const refresh = useCallback(() => {
     setRefreshNonce((current) => current + 1)
@@ -24,14 +26,21 @@ export function useLiveCurrentMarkets(modelName: string | null, riskPreset: Risk
     }
     let cancelled = false
     let timeoutId: ReturnType<typeof setTimeout> | null = null
+    const previousFetch = lastFetchRef.current
+    const riskOnlyChange =
+      previousFetch?.modelName === modelName &&
+      previousFetch.riskPresetId !== riskPreset.id &&
+      snapshotRef.current !== null
 
-    const poll = async () => {
+    const poll = async (refreshMarkets: boolean) => {
       setLoading(true)
       setError(null)
       try {
-        const nextSnapshot = await getCurrentMarkets(modelName, riskPreset)
+        const nextSnapshot = await getCurrentMarkets(modelName, riskPreset, { refreshMarkets })
         if (!cancelled) {
           setSnapshot(nextSnapshot)
+          snapshotRef.current = nextSnapshot
+          lastFetchRef.current = { modelName, riskPresetId: riskPreset.id }
         }
       } catch (err) {
         if (!cancelled) {
@@ -40,13 +49,18 @@ export function useLiveCurrentMarkets(modelName: string | null, riskPreset: Risk
       } finally {
         if (!cancelled) {
           setLoading(false)
-          timeoutId = setTimeout(poll, POLL_INTERVAL_MS)
+          timeoutId = setTimeout(() => {
+            void poll(true)
+          }, POLL_INTERVAL_MS)
         }
       }
     }
 
-    setSnapshot(null)
-    void poll()
+    if (!riskOnlyChange) {
+      setSnapshot(null)
+      snapshotRef.current = null
+    }
+    void poll(!riskOnlyChange)
 
     return () => {
       cancelled = true

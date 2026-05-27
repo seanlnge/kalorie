@@ -1,19 +1,21 @@
 import { ChevronDown, RefreshCcw } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
-import { formatInteger, formatProbability, formatSigned } from '@/lib/format'
+import { formatDollars, formatInteger, formatProbability, formatSigned } from '@/lib/format'
 import type { PollPredictionRow, PollSnapshot } from '@/lib/types'
 
 export interface CurrentMarketsPageProps {
   readonly snapshot: PollSnapshot | null
   readonly loading: boolean
+  readonly bankroll: number
   readonly onRefresh: () => void
 }
 
-export function CurrentMarketsPage({ snapshot, loading, onRefresh }: CurrentMarketsPageProps) {
+export function CurrentMarketsPage({ snapshot, loading, bankroll, onRefresh }: CurrentMarketsPageProps) {
   const eventGroups = useMemo(() => groupByEvent(snapshot?.prediction_rows ?? []), [snapshot])
   const [closedEvents, setClosedEvents] = useState<Set<string>>(new Set())
   const [now, setNow] = useState(() => Date.now())
+  const initializedEventLayout = useRef(false)
 
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000)
@@ -22,8 +24,28 @@ export function CurrentMarketsPage({ snapshot, loading, onRefresh }: CurrentMark
 
   useEffect(() => {
     setClosedEvents((current) => {
-      const next = new Set<string>()
+      if (eventGroups.length === 0) {
+        initializedEventLayout.current = false
+        return new Set<string>()
+      }
+
       const eventTickers = new Set(eventGroups.map((group) => group.eventTicker))
+      if (!initializedEventLayout.current) {
+        initializedEventLayout.current = true
+        const openTickers = new Set(
+          eventGroups.filter((group) => group.tradeCount > 0).map((group) => group.eventTicker),
+        )
+        if (openTickers.size === 0) {
+          openTickers.add(eventGroups[0].eventTicker)
+        }
+        return new Set(
+          eventGroups
+            .filter((group) => !openTickers.has(group.eventTicker))
+            .map((group) => group.eventTicker),
+        )
+      }
+
+      const next = new Set<string>()
       for (const eventTicker of current) {
         if (eventTickers.has(eventTicker)) {
           next.add(eventTicker)
@@ -33,10 +55,14 @@ export function CurrentMarketsPage({ snapshot, loading, onRefresh }: CurrentMark
     })
   }, [eventGroups])
 
+  const expandAllEvents = () => setClosedEvents(new Set())
+  const collapseAllEvents = () =>
+    setClosedEvents(new Set(eventGroups.map((group) => group.eventTicker)))
+
   return (
     <section className="space-y-4">
       <div className="grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
-        <MarketMetric label="Since last polled" value={formatTimeSince(snapshot?.completed_at, now, loading)} />
+        <MarketMetric label="Poll" value={formatPollTimers(snapshot, now, loading)} />
         <MarketMetric label="Events" value={formatInteger(eventGroups.length)} />
         <MarketMetric label="Markets" value={formatInteger(snapshot?.market_count)} />
         <MarketMetric label="Trades" value={formatInteger(snapshot?.trade_count)} tone="text-green" />
@@ -49,6 +75,31 @@ export function CurrentMarketsPage({ snapshot, loading, onRefresh }: CurrentMark
           Refresh
         </button>
       </div>
+
+      {eventGroups.length > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-panel/70 px-4 py-3">
+          <p className="max-w-2xl text-sm text-muted">
+            Showing trade-bearing events open first. Expand the full board when you want to inspect
+            every contract.
+          </p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={expandAllEvents}
+              className="rounded border border-line bg-background px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em] text-cyan transition hover:border-cyan/60"
+            >
+              Expand all
+            </button>
+            <button
+              type="button"
+              onClick={collapseAllEvents}
+              className="rounded border border-line bg-background px-3 py-2 font-mono text-[10px] uppercase tracking-[0.14em] text-muted transition hover:border-muted/60 hover:text-foreground"
+            >
+              Collapse all
+            </button>
+          </div>
+        </div>
+      ) : null}
 
       <div className="space-y-3">
         {eventGroups.length === 0 ? (
@@ -64,6 +115,7 @@ export function CurrentMarketsPage({ snapshot, loading, onRefresh }: CurrentMark
             <EventMarketGroup
               key={group.eventTicker}
               group={group}
+              bankroll={bankroll}
               open={!closedEvents.has(group.eventTicker)}
               onToggle={() =>
                 setClosedEvents((current) => {
@@ -87,6 +139,7 @@ export function CurrentMarketsPage({ snapshot, loading, onRefresh }: CurrentMark
 interface EventGroup {
   eventTicker: string
   eventDatetime: string | null
+  eventTitle: string
   totalExpectedEv: number
   tradeCount: number
   tradePercent: number
@@ -107,6 +160,7 @@ function groupByEvent(rows: PollPredictionRow[]): EventGroup[] {
     .map(([eventTicker, eventRows]) => ({
       eventTicker,
       eventDatetime: eventRows.find((row) => row.event_datetime)?.event_datetime ?? null,
+      eventTitle: eventRows.find((row) => row.event_title)?.event_title ?? '',
       totalExpectedEv: eventRows.reduce((total, row) => total + (row.ev_per_contract ?? row.edge), 0),
       tradeCount: eventRows.filter((row) => row.side === 'YES' || row.side === 'NO').length,
       tradePercent:
@@ -143,23 +197,38 @@ function groupByEvent(rows: PollPredictionRow[]): EventGroup[] {
 
 function EventMarketGroup({
   group,
+  bankroll,
   open,
   onToggle,
 }: {
   readonly group: EventGroup
+  readonly bankroll: number
   readonly open: boolean
   readonly onToggle: () => void
 }) {
   return (
     <section className="overflow-hidden rounded-lg border border-line bg-panel/82 shadow-terminal">
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
         onClick={onToggle}
-        className="flex w-full flex-wrap items-center justify-between gap-3 border-b border-line bg-panelStrong/55 px-4 py-3 text-left"
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault()
+            onToggle()
+          }
+        }}
+        className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 border-b border-line bg-panelStrong/55 px-4 py-3 text-left outline-none transition hover:border-cyan/40 focus-visible:ring-1 focus-visible:ring-cyan/70"
       >
         <div className="min-w-0">
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">Event</p>
-          <h2 className="break-all font-mono text-sm font-semibold text-foreground">{group.eventTicker}</h2>
+          <h2 className="font-display text-base font-semibold text-foreground">
+            {group.eventTitle || group.eventTicker}
+          </h2>
+          <p className="mt-0.5 break-all font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
+            {group.eventTicker}
+          </p>
           <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-cyan">
             {formatEventDateTime(group.eventDatetime)}
           </p>
@@ -188,18 +257,20 @@ function EventMarketGroup({
             className={`text-muted transition-transform ${open ? '' : '-rotate-90'}`}
           />
         </div>
-      </button>
+      </div>
       {open ? <div className="overflow-x-auto">
         <table className="min-w-full border-collapse text-sm">
           <thead className="bg-background/70 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
             <tr>
               <th className="px-3 py-2 text-left font-medium">Market</th>
               <th className="px-3 py-2 text-left font-medium">Phrase</th>
+              <th className="px-3 py-2 text-left font-medium">Action</th>
               <th className="px-3 py-2 text-right font-medium">Expected</th>
               <th className="px-3 py-2 text-right font-medium">Bid</th>
               <th className="px-3 py-2 text-right font-medium">Ask</th>
               <th className="px-3 py-2 text-right font-medium">Spread</th>
               <th className="px-3 py-2 text-right font-medium">EV/Contract</th>
+              <th className="px-3 py-2 text-right font-medium">Buy</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line/70">
@@ -214,6 +285,9 @@ function EventMarketGroup({
                   </p>
                 </td>
                 <td className="px-3 py-2 text-muted">{row.target_phrase || '--'}</td>
+                <td className="px-3 py-2">
+                  <SideBadge side={row.side} />
+                </td>
                 <td className="px-3 py-2 text-right font-mono text-foreground">
                   {formatProbability(row.model_probability)}
                 </td>
@@ -229,6 +303,9 @@ function EventMarketGroup({
                 >
                   {formatSigned(row.ev_per_contract ?? row.edge)}
                 </td>
+                <td className="px-3 py-2 text-right">
+                  <TradeSize row={row} bankroll={bankroll} />
+                </td>
               </tr>
             ))}
           </tbody>
@@ -236,6 +313,61 @@ function EventMarketGroup({
       </div> : null}
     </section>
   )
+}
+
+function TradeSize({
+  row,
+  bankroll,
+}: {
+  readonly row: PollPredictionRow
+  readonly bankroll: number
+}) {
+  const size = tradeSize(row, bankroll)
+  if (!size) {
+    return <span className="font-mono text-xs text-muted">--</span>
+  }
+  return (
+    <div className="font-mono">
+      <p className="text-sm font-semibold text-green">{formatDollars(size.dollars)}</p>
+      <p className="text-[10px] uppercase tracking-[0.12em] text-muted">
+        {formatInteger(size.contracts)} @ {formatDollars(size.contractCost)}
+      </p>
+    </div>
+  )
+}
+
+function tradeSize(
+  row: PollPredictionRow,
+  bankroll: number,
+): { dollars: number; contracts: number; contractCost: number } | null {
+  if (row.side !== 'YES' && row.side !== 'NO') return null
+  if (row.passes_risk_filter === false) return null
+  const recommendedFraction = row.recommended_fraction ?? 0
+  if (recommendedFraction <= 0 || bankroll <= 0 || row.cost <= 0) return null
+  const rawDollars = bankroll * recommendedFraction
+  const contracts = Math.floor(rawDollars / row.cost)
+  if (contracts <= 0) return null
+  return {
+    dollars: Number((contracts * row.cost).toFixed(2)),
+    contracts,
+    contractCost: row.cost,
+  }
+}
+
+function SideBadge({ side }: { readonly side: string }) {
+  return (
+    <span
+      className={`inline-flex rounded-full border px-2 py-1 font-mono text-[10px] font-semibold uppercase tracking-[0.12em] ${sideTone(side)}`}
+    >
+      {side === 'NONE' ? 'No trade' : side}
+    </span>
+  )
+}
+
+function sideTone(side: string): string {
+  if (side === 'YES') return 'border-green/30 bg-green/10 text-green'
+  if (side === 'NO') return 'border-red/30 bg-red/10 text-red'
+  return 'border-line bg-background/60 text-muted'
 }
 
 function MarketMetric({
@@ -255,6 +387,26 @@ function MarketMetric({
   )
 }
 
+function formatPollTimers(snapshot: PollSnapshot | null, now: number, loading: boolean): string {
+  const kal = loading && !snapshot ? 'polling...' : formatTimeLeft(snapshot?.next_market_poll_at, now)
+  const run = formatTimeLeft(snapshot?.next_model_run_at, now)
+  return `Kal: ${kal}; Run: ${run}`
+}
+
+function formatTimeLeft(value: string | null | undefined, now: number): string {
+  if (!value) return '--'
+  const parsed = Date.parse(value)
+  if (Number.isNaN(parsed)) return '--'
+  const seconds = Math.max(0, Math.ceil((parsed - now) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (minutes < 60) return remainingSeconds > 0 ? `${minutes}m ${remainingSeconds}s` : `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`
+}
+
 function eventSortTime(value: string | null): number {
   if (!value) {
     return Number.POSITIVE_INFINITY
@@ -265,13 +417,21 @@ function eventSortTime(value: string | null): number {
 
 function formatEventDateTime(value: string | null): string {
   if (!value) {
-    return 'Event time unknown on Kalshi'
+    return 'Event date unknown on Kalshi'
   }
   const parsed = Date.parse(value)
   if (Number.isNaN(parsed)) {
-    return 'Event time unknown on Kalshi'
+    return 'Event date unknown on Kalshi'
   }
-  return `Kalshi event time ${new Date(parsed).toLocaleString()}`
+  const date = new Date(parsed)
+  if (
+    date.getUTCHours() === 0 &&
+    date.getUTCMinutes() === 0 &&
+    date.getUTCSeconds() === 0
+  ) {
+    return `Kalshi event date ${date.toLocaleDateString(undefined, { timeZone: 'UTC' })}`
+  }
+  return `Kalshi event time ${date.toLocaleString()}`
 }
 
 function formatTimeSince(value: string | undefined, now: number, loading: boolean): string {

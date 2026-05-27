@@ -1,129 +1,132 @@
-import { formatSigned } from '@/lib/format'
+import { formatProbability, formatSigned } from '@/lib/format'
 import type { RiskPresetTrial } from '@/lib/types'
 
 export interface RiskReturnBandChartProps {
-  readonly trials: readonly RiskPresetTrial[]
-  readonly selectedRiskPresetId: string | null
+  readonly trial: RiskPresetTrial | null
 }
 
 const WIDTH = 760
 const HEIGHT = 260
-const PAD_X = 44
+const PAD_X = 64
 const PAD_Y = 30
 
-export function RiskReturnBandChart({
-  trials,
-  selectedRiskPresetId,
-}: RiskReturnBandChartProps) {
-  if (trials.length === 0) {
-    return null
+export function RiskReturnBandChart({ trial }: RiskReturnBandChartProps) {
+  if (!trial) {
+    return (
+      <section className="rounded-lg border border-dashed border-line bg-panel/60 p-5 shadow-terminal">
+        <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
+          Selected model + risk preset
+        </p>
+        <h2 className="mt-2 font-display text-lg font-semibold">No trial distribution yet</h2>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
+          This preset can score live markets, but the model card does not include a bootstrap
+          risk-return distribution for it yet. Built-in presets show percentile bands here; custom
+          session presets need a generated trial artifact before this chart can compare downside and
+          upside.
+        </p>
+      </section>
+    )
   }
-  const values = trials.flatMap((trial) => [
-    trial.expected_return_per_market.p10,
-    trial.expected_return_per_market.p25,
-    trial.expected_return_per_market.expected,
-    trial.expected_return_per_market.p75,
-    trial.expected_return_per_market.p90,
-  ])
+
+  const band = trial.expected_return_per_market
+  const values = [band.p10, band.p25, band.expected, band.p75, band.p90]
   const minValue = Math.min(...values, 0)
   const maxValue = Math.max(...values, 0)
   const span = maxValue - minValue || 1
-  const x = (index: number) =>
-    trials.length === 1
-      ? WIDTH / 2
-      : PAD_X + (index * (WIDTH - PAD_X * 2)) / (trials.length - 1)
-  const y = (value: number) => HEIGHT - PAD_Y - ((value - minValue) / span) * (HEIGHT - PAD_Y * 2)
-
-  const line = (selector: (trial: RiskPresetTrial) => number) =>
-    trials.map((trial, index) => `${x(index)},${y(selector(trial))}`).join(' ')
-  const zeroY = y(0)
+  const x = (value: number) => PAD_X + ((value - minValue) / span) * (WIDTH - PAD_X * 2)
+  const axisY = HEIGHT / 2
+  const zeroX = x(0)
 
   return (
     <section className="rounded-lg border border-line bg-panel/82 p-4 shadow-terminal">
       <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
-            Risk preset distribution
+            Selected model + risk preset
           </p>
-          <h2 className="font-display text-lg font-semibold">Expected return per market</h2>
+          <h2 className="font-display text-lg font-semibold">
+            {trial.label} risk-return distribution
+          </h2>
+          <p className="mt-1 max-w-2xl text-sm leading-6 text-muted">
+            White marks expected return. Red is downside percentile range, blue is upside
+            percentile range, and the vertical rail marks zero return.
+          </p>
         </div>
-        <div className="flex flex-wrap gap-3 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
-          <LegendSwatch className="bg-foreground" label="Expected" />
-          <LegendSwatch className="bg-red" label="P25/P10" />
-          <LegendSwatch className="bg-cyan" label="P75/P90" />
+        <div className="grid grid-cols-3 gap-2 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
+          <Summary label="EV/10 mkts" value={formatSigned(trial.ev_per_10_markets)} />
+          <Summary label="Trade %" value={formatProbability(trial.trade_percent)} />
+          <Summary label="Risk of ruin" value={formatProbability(trial.risk_of_ruin_estimate)} />
         </div>
       </div>
       <div className="overflow-x-auto">
         <svg
           viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
           role="img"
-          aria-label="Expected return per market with percentile bands by risk preset"
+          aria-label="Expected return per market with percentile bands for the selected risk preset"
           className="min-w-[680px]"
         >
-          <line x1={PAD_X} x2={WIDTH - PAD_X} y1={zeroY} y2={zeroY} className="stroke-line" />
-          <polyline
-            points={line((trial) => trial.expected_return_per_market.p10)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="text-red opacity-50"
-          />
-          <polyline
-            points={line((trial) => trial.expected_return_per_market.p25)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            className="text-red"
-          />
-          <polyline
-            points={line((trial) => trial.expected_return_per_market.expected)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.5"
-            className="text-foreground"
-          />
-          <polyline
-            points={line((trial) => trial.expected_return_per_market.p75)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            className="text-cyan"
-          />
-          <polyline
-            points={line((trial) => trial.expected_return_per_market.p90)}
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.5"
-            className="text-cyan opacity-50"
-          />
-          {trials.map((trial, index) => {
-            const pointX = x(index)
-            const expectedY = y(trial.expected_return_per_market.expected)
-            const selected = trial.risk_preset_id === selectedRiskPresetId
-            return (
-              <g key={trial.risk_preset_id}>
-                <circle
-                  cx={pointX}
-                  cy={expectedY}
-                  r={selected ? 5 : 3.5}
-                  className={selected ? 'fill-foreground' : 'fill-muted'}
-                />
-                <text
-                  x={pointX}
-                  y={HEIGHT - 8}
-                  textAnchor="middle"
-                  className={selected ? 'fill-foreground font-mono text-[10px]' : 'fill-muted font-mono text-[10px]'}
-                >
-                  {trial.label}
-                </text>
-              </g>
-            )
-          })}
-          <text x={PAD_X} y={16} className="fill-muted font-mono text-[10px]">
-            {formatSigned(maxValue)}
+          <line x1={PAD_X} x2={WIDTH - PAD_X} y1={axisY} y2={axisY} className="stroke-line" />
+          <line x1={zeroX} x2={zeroX} y1={PAD_Y} y2={HEIGHT - PAD_Y} className="stroke-line" />
+          <text
+            x={zeroX}
+            y={PAD_Y - 8}
+            textAnchor="middle"
+            className="fill-muted font-mono text-[9px] uppercase tracking-[0.12em]"
+          >
+            zero
           </text>
-          <text x={PAD_X} y={HEIGHT - 6} className="fill-muted font-mono text-[10px]">
+          <line
+            x1={x(band.p10)}
+            x2={x(band.p25)}
+            y1={axisY}
+            y2={axisY}
+            strokeWidth="8"
+            strokeLinecap="round"
+            className="stroke-red opacity-50"
+          />
+          <line
+            x1={x(band.p25)}
+            x2={x(band.expected)}
+            y1={axisY}
+            y2={axisY}
+            strokeWidth="8"
+            strokeLinecap="round"
+            className="stroke-red"
+          />
+          <line
+            x1={x(band.expected)}
+            x2={x(band.p75)}
+            y1={axisY}
+            y2={axisY}
+            strokeWidth="8"
+            strokeLinecap="round"
+            className="stroke-cyan"
+          />
+          <line
+            x1={x(band.p75)}
+            x2={x(band.p90)}
+            y1={axisY}
+            y2={axisY}
+            strokeWidth="8"
+            strokeLinecap="round"
+            className="stroke-cyan opacity-50"
+          />
+          <circle cx={x(band.expected)} cy={axisY} r="7" className="fill-foreground" />
+          <BandLabel x={x(band.p10)} y={axisY + 32} label="P10 downside" value={band.p10} />
+          <BandLabel x={x(band.p25)} y={axisY - 24} label="P25" value={band.p25} />
+          <BandLabel x={x(band.expected)} y={axisY - 54} label="Expected" value={band.expected} />
+          <BandLabel x={x(band.p75)} y={axisY - 24} label="P75" value={band.p75} />
+          <BandLabel x={x(band.p90)} y={axisY + 32} label="P90 upside" value={band.p90} />
+          <text x={PAD_X} y={HEIGHT - 8} className="fill-muted font-mono text-[10px]">
             {formatSigned(minValue)}
+          </text>
+          <text
+            x={WIDTH - PAD_X}
+            y={HEIGHT - 8}
+            textAnchor="end"
+            className="fill-muted font-mono text-[10px]"
+          >
+            {formatSigned(maxValue)}
           </text>
         </svg>
       </div>
@@ -131,11 +134,29 @@ export function RiskReturnBandChart({
   )
 }
 
-function LegendSwatch({ className, label }: { readonly className: string; readonly label: string }) {
+function Summary({ label, value }: { readonly label: string; readonly value: string }) {
   return (
-    <span className="inline-flex items-center gap-2">
-      <span className={`h-2 w-5 rounded-sm ${className}`} />
-      {label}
-    </span>
+    <div className="rounded border border-line bg-background/55 px-2 py-1">
+      <p>{label}</p>
+      <p className="mt-1 text-foreground">{value}</p>
+    </div>
+  )
+}
+
+function BandLabel({
+  x,
+  y,
+  label,
+  value,
+}: {
+  readonly x: number
+  readonly y: number
+  readonly label: string
+  readonly value: number
+}) {
+  return (
+    <text x={x} y={y} textAnchor="middle" className="fill-muted font-mono text-[10px]">
+      {label} {formatSigned(value)}
+    </text>
   )
 }

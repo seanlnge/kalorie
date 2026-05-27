@@ -41,3 +41,15 @@ When a launcher starts child Python processes, set `PYTHONPATH` to an absolute `
 ## 2026-05-27: Keep model cards predictive-only
 
 Do not put execution policy, minimum margin, ROI, trade selection, Kelly sizing, or other risk-tolerance assumptions inside saved model cards or model creation. Model cards should evaluate probability quality; trading overlays and expected-return distributions belong in separate risk preset artifacts/UI fields.
+
+## 2026-05-27: Risk of ruin is an outcome, not a preset input
+
+Do not store risk-of-ruin estimates or labels on risk presets. A preset can define knobs like margin, side policy, Kelly fraction, max position exposure, and max event exposure; risk of ruin depends on the selected model's return distribution under that preset and belongs in model+preset trial output.
+
+## 2026-05-27: Kalshi event date comes from event metadata
+
+For live earnings-mention cards, hydrate `/events/{event_ticker}` and prefer the event title plus `event_subtitle` / `sub_title` date (for example, "On May 27, 2026") over market expiration fields. Mention-market expiration timestamps can point to contract expiry rather than the earnings-call date the UI should sort and display.
+
+## 2026-05-27: Kalshi authenticated requests need signing credentials
+
+Do not treat a Kalshi API key ID by itself as sufficient for authenticated trading API requests. Kalshi authenticated requests require `KALSHI-ACCESS-KEY`, `KALSHI-ACCESS-TIMESTAMP`, and `KALSHI-ACCESS-SIGNATURE`; the signature is produced with the private key over timestamp + method + path. Public market data can stay unauthenticated, but portfolio/balance endpoints need the key ID plus private key material/path.

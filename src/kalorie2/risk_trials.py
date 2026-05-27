@@ -68,6 +68,7 @@ def _build_risk_preset_trial(
         samples=bootstrap_samples,
         seed=bootstrap_seed,
     )
+    ruin_estimate = _risk_of_ruin_estimate(samples)
     band = ReturnPercentileBand(
         p10=round(_percentile(samples, 0.10), 6),
         p25=round(_percentile(samples, 0.25), 6),
@@ -83,8 +84,8 @@ def _build_risk_preset_trial(
         kelly_fraction=preset.kelly_fraction,
         max_position_fraction=preset.max_position_fraction,
         max_event_exposure_fraction=preset.max_event_exposure_fraction,
-        risk_of_ruin_estimate=preset.risk_of_ruin_estimate,
-        risk_of_ruin_label=preset.risk_of_ruin_label,
+        risk_of_ruin_estimate=round(ruin_estimate, 6),
+        risk_of_ruin_label=_risk_of_ruin_label(ruin_estimate),
         trade_count=len(trade_rows),
         market_count=len(rows),
         trade_percent=(len(trade_rows) / len(rows)) if rows else 0.0,
@@ -153,3 +154,22 @@ def _percentile(values: list[float], quantile: float) -> float:
     upper = min(lower + 1, len(ordered) - 1)
     weight = position - lower
     return ordered[lower] * (1 - weight) + ordered[upper] * weight
+
+
+def _risk_of_ruin_estimate(samples: list[float]) -> float:
+    if not samples:
+        return 0.0
+    losing_samples = sum(1 for value in samples if value < 0)
+    return losing_samples / len(samples)
+
+
+def _risk_of_ruin_label(value: float) -> str:
+    if value <= 0.01:
+        return "Very low"
+    if value <= 0.05:
+        return "Low"
+    if value <= 0.15:
+        return "Moderate"
+    if value <= 0.3:
+        return "High"
+    return "Aggressive"

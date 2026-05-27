@@ -21,8 +21,6 @@ class RiskPreset(RiskPresetBase):
     kelly_fraction: float = Field(ge=0.0, le=1.0)
     max_position_fraction: float = Field(ge=0.0, le=1.0)
     max_event_exposure_fraction: float = Field(ge=0.0, le=1.0)
-    risk_of_ruin_estimate: float = Field(ge=0.0, le=1.0)
-    risk_of_ruin_label: str
 
 
 class RiskDecision(RiskPresetBase):
@@ -46,8 +44,6 @@ BUILT_IN_RISK_PRESETS: tuple[RiskPreset, ...] = (
         kelly_fraction=0.25,
         max_position_fraction=0.015,
         max_event_exposure_fraction=0.05,
-        risk_of_ruin_estimate=0.005,
-        risk_of_ruin_label="Very low",
     ),
     RiskPreset(
         id="balanced",
@@ -58,8 +54,6 @@ BUILT_IN_RISK_PRESETS: tuple[RiskPreset, ...] = (
         kelly_fraction=0.5,
         max_position_fraction=0.05,
         max_event_exposure_fraction=0.12,
-        risk_of_ruin_estimate=0.015,
-        risk_of_ruin_label="Low",
     ),
     RiskPreset(
         id="growth",
@@ -70,8 +64,6 @@ BUILT_IN_RISK_PRESETS: tuple[RiskPreset, ...] = (
         kelly_fraction=0.75,
         max_position_fraction=0.1,
         max_event_exposure_fraction=0.25,
-        risk_of_ruin_estimate=0.04,
-        risk_of_ruin_label="Moderate",
     ),
 )
 

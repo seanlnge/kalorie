@@ -11,8 +11,6 @@ export interface RiskPreset {
   kelly_fraction: number
   max_position_fraction: number
   max_event_exposure_fraction: number
-  risk_of_ruin_estimate: number
-  risk_of_ruin_label: string
 }
 
 export interface TrainingSummary {
@@ -156,6 +154,7 @@ export interface PollPredictionRow {
   market_ticker: string
   event_ticker: string
   event_datetime?: string | null
+  event_title?: string | null
   target_phrase: string
   model_name: string
   risk_preset_id?: string | null
@@ -172,6 +171,8 @@ export interface PollPredictionRow {
   recommended_fraction?: number | null
   passes_risk_filter?: boolean | null
   volume: number
+  recommended_dollars?: number | null
+  recommended_contracts?: number | null
 }
 
 export interface PollSnapshot {
@@ -180,9 +181,24 @@ export interface PollSnapshot {
   risk_preset_id?: string | null
   started_at: string
   completed_at: string
+  market_polled_at?: string | null
+  model_run_started_at?: string | null
+  model_run_completed_at?: string | null
+  next_market_poll_at?: string | null
+  next_model_run_at?: string | null
   market_count: number
   prediction_count: number
   trade_count: number
   prediction_rows: PollPredictionRow[]
   trade_rows: PollPredictionRow[]
+}
+
+export interface AccountSummary {
+  available: boolean
+  source: 'kalshi' | 'paper' | string
+  portfolio_value?: number | null
+  free_cash?: number | null
+  position_exposure?: number | null
+  bankroll: number
+  error?: string | null
 }

@@ -1,59 +1,28 @@
-import { PollPredictionTable } from '@/components/PollPredictionTable'
-import { formatInteger } from '@/lib/format'
-import type { PollSnapshot } from '@/lib/types'
-
-export interface TradingHistoryPageProps {
-  readonly history: readonly PollSnapshot[]
-}
-
-export function TradingHistoryPage({ history }: TradingHistoryPageProps) {
-  const totalTrades = history.reduce((total, snapshot) => total + snapshot.trade_count, 0)
-  const latest = history[0] ?? null
-
+export function TradingHistoryPage() {
   return (
     <section className="space-y-4">
       <div className="grid gap-3 md:grid-cols-4">
-        <HistoryMetric label="Polls" value={formatInteger(history.length)} />
-        <HistoryMetric label="Trade candidates" value={formatInteger(totalTrades)} tone="text-green" />
-        <HistoryMetric label="Latest poll" value={latest?.poll_id ?? '--'} />
-        <HistoryMetric
-          label="Latest completed"
-          value={latest ? new Date(latest.completed_at).toLocaleString() : '--'}
-        />
+        <HistoryMetric label="Execution" value="Not live" tone="text-amber" />
+        <HistoryMetric label="Executed trades" value="--" />
+        <HistoryMetric label="Open positions" value="--" />
+        <HistoryMetric label="Realized PnL" value="--" />
       </div>
 
-      <div className="space-y-3">
-        {history.length === 0 ? (
-          <div className="rounded-lg border border-amber/35 bg-amber/10 p-5 text-sm text-amber">
-            No poll history found. Run `kalorie2-market-poller once` or `loop` to seed this page.
-          </div>
-        ) : (
-          history.map((snapshot) => (
-            <section
-              key={snapshot.poll_id}
-              className="rounded-lg border border-line bg-panel/82 p-4 shadow-terminal"
-            >
-              <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                  <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
-                    Poll {snapshot.poll_id}
-                  </p>
-                  <h2 className="font-display text-lg font-semibold">
-                    {snapshot.trade_count} trade candidates from {snapshot.prediction_count} predictions
-                  </h2>
-                </div>
-                <p className="font-mono text-xs text-muted">
-                  {new Date(snapshot.completed_at).toLocaleString()}
-                </p>
-              </div>
-              <PollPredictionTable
-                rows={snapshot.trade_rows}
-                emptyMessage="This poll produced no trade candidates."
-              />
-            </section>
-          ))
-        )}
-      </div>
+      <section className="rounded-lg border border-line bg-panel/82 p-5 shadow-terminal">
+        <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
+          Executed trade ledger
+        </p>
+        <h2 className="mt-2 font-display text-lg font-semibold">No trades have been placed yet</h2>
+        <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
+          Poll snapshots and risk overlays are model tests, not executed trades. This ledger will stay
+          empty until trading functionality records real fills, positions, and realized PnL.
+        </p>
+        <div className="mt-5 grid gap-3 md:grid-cols-3">
+          <RoadmapStep label="1" title="Market scan" description="Current Markets ranks live opportunities." />
+          <RoadmapStep label="2" title="Human review" description="Use model + risk preset output as research." />
+          <RoadmapStep label="3" title="Execution later" description="Real fills will populate this ledger." />
+        </div>
+      </section>
     </section>
   )
 }
@@ -71,6 +40,24 @@ function HistoryMetric({
     <div className="rounded-lg border border-line bg-panel/75 p-4 shadow-terminal">
       <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">{label}</p>
       <p className={`mt-2 break-all font-mono text-lg font-semibold leading-6 ${tone}`}>{value}</p>
+    </div>
+  )
+}
+
+function RoadmapStep({
+  label,
+  title,
+  description,
+}: {
+  readonly label: string
+  readonly title: string
+  readonly description: string
+}) {
+  return (
+    <div className="rounded-md border border-line bg-background/55 p-3">
+      <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-cyan">Step {label}</p>
+      <p className="mt-2 font-display text-sm font-semibold text-foreground">{title}</p>
+      <p className="mt-1 text-xs leading-5 text-muted">{description}</p>
     </div>
   )
 }

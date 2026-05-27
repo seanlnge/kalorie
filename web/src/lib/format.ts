@@ -19,3 +19,8 @@ export function formatCurrency(value: number | null | undefined): string {
   const sign = value > 0 ? '+' : value < 0 ? '-' : ''
   return `${sign}$${Math.abs(value).toFixed(2)}`
 }
+
+export function formatDollars(value: number | null | undefined): string {
+  if (value === null || value === undefined || Number.isNaN(value)) return '--'
+  return `$${value.toFixed(2)}`
+}

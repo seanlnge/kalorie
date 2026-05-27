@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { getModel, getSampleRows, listModels, scoreModel } from '@/lib/api'
 import type { ExecutionMode, SampleRow, SavedModelMetadata, ScoreRow } from '@/lib/types'
@@ -37,6 +37,8 @@ export function useWorkstation(): UseWorkstationResult {
   const [loading, setLoading] = useState(true)
   const [scoring, setScoring] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const scoreRequestId = useRef(0)
+  const detailRequestId = useRef(0)
 
   useEffect(() => {
     let cancelled = false
@@ -65,17 +67,27 @@ export function useWorkstation(): UseWorkstationResult {
       return
     }
     let cancelled = false
+    const requestId = detailRequestId.current + 1
+    detailRequestId.current = requestId
     setError(null)
+    scoreRequestId.current += 1
+    setScoring(false)
+    setSelectedModel(null)
+    setSampleRows([])
+    setSelectedRowIndex(0)
+    setPredictions([])
     Promise.all([getModel(selectedModelName), getSampleRows(selectedModelName)])
       .then(([model, rows]) => {
-        if (cancelled) return
+        if (cancelled || detailRequestId.current !== requestId) return
+        scoreRequestId.current += 1
+        setScoring(false)
         setSelectedModel(model)
         setSampleRows(rows)
         setSelectedRowIndex(Number(rows[0]?.row_index ?? 0))
         setPredictions([])
       })
       .catch((err: unknown) => {
-        if (!cancelled) {
+        if (!cancelled && detailRequestId.current === requestId) {
           setError(err instanceof Error ? err.message : 'Failed to load model detail')
         }
       })
@@ -86,11 +98,33 @@ export function useWorkstation(): UseWorkstationResult {
 
   const actions = useMemo<WorkstationActions>(
     () => ({
-      selectModel: setSelectedModelName,
-      setExecutionMode,
-      setSelectedRowIndex,
+      selectModel: (modelName) => {
+        if (modelName === selectedModelName) return
+        detailRequestId.current += 1
+        scoreRequestId.current += 1
+        setScoring(false)
+        setSelectedModel(null)
+        setSampleRows([])
+        setSelectedRowIndex(0)
+        setPredictions([])
+        setSelectedModelName(modelName)
+      },
+      setExecutionMode: (mode) => {
+        scoreRequestId.current += 1
+        setExecutionMode(mode)
+        setScoring(false)
+        setPredictions([])
+      },
+      setSelectedRowIndex: (rowIndex) => {
+        scoreRequestId.current += 1
+        setSelectedRowIndex(rowIndex)
+        setScoring(false)
+        setPredictions([])
+      },
       scoreSelectedRow: async () => {
-        if (!selectedModelName) return
+        if (!selectedModelName || !selectedModel) return
+        const requestId = scoreRequestId.current + 1
+        scoreRequestId.current = requestId
         setScoring(true)
         setError(null)
         try {
@@ -99,15 +133,23 @@ export function useWorkstation(): UseWorkstationResult {
             executionMode,
             rowIndex: selectedRowIndex,
           })
-          setPredictions(response.rows)
+          if (scoreRequestId.current === requestId) {
+            setPredictions(response.rows)
+          }
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Failed to score sample row')
+          if (scoreRequestId.current === requestId) {
+            setError(err instanceof Error ? err.message : 'Failed to score sample row')
+          }
         } finally {
-          setScoring(false)
+          if (scoreRequestId.current === requestId) {
+            setScoring(false)
+          }
         }
       },
       scoreUploadedCsv: async (file: File) => {
-        if (!selectedModelName) return
+        if (!selectedModelName || !selectedModel) return
+        const requestId = scoreRequestId.current + 1
+        scoreRequestId.current = requestId
         setScoring(true)
         setError(null)
         try {
@@ -117,15 +159,21 @@ export function useWorkstation(): UseWorkstationResult {
             rowIndex: selectedRowIndex,
             csvFile: file,
           })
-          setPredictions(response.rows)
+          if (scoreRequestId.current === requestId) {
+            setPredictions(response.rows)
+          }
         } catch (err) {
-          setError(err instanceof Error ? err.message : 'Failed to score uploaded CSV')
+          if (scoreRequestId.current === requestId) {
+            setError(err instanceof Error ? err.message : 'Failed to score uploaded CSV')
+          }
         } finally {
-          setScoring(false)
+          if (scoreRequestId.current === requestId) {
+            setScoring(false)
+          }
         }
       },
     }),
-    [executionMode, selectedModelName, selectedRowIndex],
+    [executionMode, selectedModel, selectedModelName, selectedRowIndex],
   )
 
   return {

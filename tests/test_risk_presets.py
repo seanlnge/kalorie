@@ -25,8 +25,6 @@ def test_risk_preset_selects_no_trade_and_fractional_kelly_size() -> None:
         kelly_fraction=0.5,
         max_position_fraction=0.05,
         max_event_exposure_fraction=0.12,
-        risk_of_ruin_estimate=0.01,
-        risk_of_ruin_label="Low",
     )
 
     decision = apply_risk_preset_to_market(
@@ -55,8 +53,6 @@ def test_risk_preset_blocks_trade_when_margin_or_side_policy_fails() -> None:
         kelly_fraction=0.5,
         max_position_fraction=0.05,
         max_event_exposure_fraction=0.12,
-        risk_of_ruin_estimate=0.01,
-        risk_of_ruin_label="Low",
     )
 
     no_signal = apply_risk_preset_to_market(

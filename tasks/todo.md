@@ -964,7 +964,7 @@ Add Windows PowerShell and POSIX shell entrypoints that start the local Kalorie2
 
 ### Outcome
 
-- Added `capital_preservation`, `balanced`, and `growth` risk overlays with min-margin, side policy, fractional Kelly sizing, position/event caps, and risk-of-ruin metadata.
+- Added `capital_preservation`, `balanced`, and `growth` risk overlays with min-margin, side policy, fractional Kelly sizing, and position/event caps.
 - Current-market scoring now keeps saved-model probabilities as model output, then applies the selected risk preset as the trading-policy layer.
 - Model-card generation can emit per-preset expected-return-per-market distributions with p10/p25/expected/p75/p90 bands.
 - The web UI now loads risk presets into a nav dropdown, sends the selected preset to live inference, clears stale rows on preset changes, and shows selected risk settings in Model Overview.
@@ -995,10 +995,168 @@ Verification:
 
 ### Work Checklist
 
-- [ ] Add minimal shadcn-style combobox and alert-dialog primitives for the workstation controls.
-- [ ] Replace model and risk preset native selects with searchable comboboxes.
-- [ ] Move compact model/risk stats under each combobox trigger instead of beside it.
-- [ ] Add create/name/delete preset actions in the risk selector section, backed by an alert dialog form.
-- [ ] Auto-reconcile preset fields after edits so min margin, Kelly, caps, and risk-of-ruin descriptor stay coherent.
-- [ ] Split Model Overview into predictive model information on the left and selected risk preset information on the right.
-- [ ] Run frontend build and IDE lints.
+- [x] Add minimal shadcn-style combobox and alert-dialog primitives for the workstation controls.
+- [x] Replace model and risk preset native selects with searchable comboboxes.
+- [x] Move compact model/risk stats under each combobox trigger instead of beside it.
+- [x] Add create/name/delete preset actions in the risk selector section, backed by an alert dialog form.
+- [x] Auto-reconcile preset fields after edits so min margin, Kelly, and exposure caps stay coherent.
+- [x] Split Model Overview into predictive model information on the left and selected risk preset information on the right.
+- [x] Run frontend build and IDE lints.
+
+### Outcome
+
+- Added owned shadcn-style primitives for buttons, popovers, command comboboxes, alert dialogs, inputs, and labels.
+- Replaced both nav selectors with searchable comboboxes and moved their stat strips under each trigger.
+- Added risk preset create/delete controls. Created presets are local-session presets and are sent to current-market scoring as full preset payloads.
+- Added an alert dialog form for naming/building presets; risk-of-ruin is shown only as model+preset trial output.
+- Split Model Overview into a left predictive model-card panel and a right risk-preset overlay panel.
+
+### Verification
+
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- `python -m pytest tests/test_webapi_models.py::test_current_markets_endpoint_accepts_custom_risk_preset_body tests/test_webapi_models.py::test_current_markets_endpoint_scores_latest_active_market_rows tests/test_risk_presets.py`: 5 passed.
+- `python -m ruff check src/kalorie2/webapi/main.py tests/test_webapi_models.py`: All checks passed.
+- IDE diagnostics: no linter errors found for edited frontend files.
+
+### Follow-Up: Overview Totals + Executed Trade Ledger
+
+- [x] Move static risk-of-ruin fields out of `RiskPreset`; keep it as a model+preset trial result.
+- [x] Add top Model Overview total stats for EV/10 markets, trade %, risk of ruin, and expected return per market.
+- [x] Remove the Model Overview caveats section.
+- [x] Change Trading History from poll-by-poll candidate history to an empty executed-trade ledger until real trading is implemented.
+- [x] Stop fetching poll history for the Trading History tab.
+- [x] Regenerate model card/risk trial artifacts after the risk-of-ruin boundary change.
+
+Verification:
+
+- `python -m pytest tests/test_risk_presets.py tests/test_webapi_models.py::test_current_markets_endpoint_accepts_custom_risk_preset_body tests/test_model_cards.py::test_build_risk_preset_trials_exports_expected_return_percentile_bands tests/test_saved_models.py::test_registry_parses_model_card_and_computed_picker_preview`: 6 passed.
+- `python -m ruff check src/kalorie2/risk_presets.py src/kalorie2/risk_trials.py src/kalorie2/webapi/main.py tests/test_risk_presets.py tests/test_webapi_models.py tests/test_model_cards.py`: All checks passed.
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- IDE diagnostics: no linter errors found for edited frontend files.
+
+### Follow-Up: Browser QA + Event Metadata
+
+- [x] Inspect the running web UI in Browser.
+- [x] Fix the expected-return chart so it renders the selected prediction-engine + risk-preset trial instead of falling back to a different preset.
+- [x] Move risk-preset create/delete actions fully into the risk combobox menu.
+- [x] Add help affordances and an advanced-field toggle to the risk-preset creation dialog.
+- [x] Show risk-of-ruin as the computed model+preset trial percentage.
+- [x] Hydrate active events from Kalshi `/events/{ticker}`, including event title and canonical event date, and sort by that date.
+- [x] Remove remaining "latest 30" display text from Model Overview.
+
+Verification:
+
+- Browser smoke test: Current Markets rendered `12` date-sorted events and `168` markets; ANF appeared with the Kalshi event title and event date `5/27/2026`.
+- Browser smoke test: Model Overview showed selected `Balanced` model+preset stats with risk of ruin `0.22%` and the selected-preset distribution chart.
+- Browser smoke test: Risk preset combobox contained create/delete actions, and the creation dialog exposed help icons plus an advanced sizing toggle.
+- `python -m pytest tests/test_market_poller.py tests/test_risk_presets.py tests/test_model_cards.py tests/test_saved_models.py tests/test_webapi_models.py`: 39 passed.
+- `python -m ruff check src/kalorie2/collector.py src/kalorie2/market_poller.py src/kalorie2/risk_presets.py src/kalorie2/risk_trials.py src/kalorie2/model_cards.py src/kalorie2/model_card_cli.py src/kalorie2/saved_models.py src/kalorie2/webapi/main.py tests/test_market_poller.py tests/test_risk_presets.py tests/test_model_cards.py tests/test_saved_models.py tests/test_webapi_models.py`: All checks passed.
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- IDE diagnostics: no linter errors found for edited backend/frontend files.
+
+### Follow-Up: Queued Browser Smoke Test
+
+- [x] Start the local stack from a clean stopped state.
+- [x] Smoke test Current Markets load, event date/title sorting, and ANF visibility.
+- [x] Smoke test event accordion collapse behavior.
+- [x] Smoke test risk preset combobox management and preset dialog advanced fields.
+- [x] Smoke test Trading History empty executed-trade ledger.
+- [x] Smoke test Model Overview selected model+preset graph and risk-of-ruin percentage.
+- [x] Fix the accordion header interaction bug found during Browser QA.
+
+Verification:
+
+- Browser smoke test: Current Markets rendered `12` events and `168` markets, with event titles and Kalshi event dates.
+- Browser smoke test: Event accordion headers now collapse correctly and expose `aria-expanded`.
+- Browser smoke test: Risk preset combobox opens create/delete actions, and the preset dialog shows help affordances plus advanced sizing fields.
+- Browser smoke test: Trading History shows an empty executed-trade ledger, not poll history.
+- Browser smoke test: Model Overview shows the selected `Balanced` trial graph and risk of ruin `0.22%`.
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- `python -m pytest tests/test_market_poller.py tests/test_webapi_models.py`: 23 passed.
+- IDE diagnostics: no linter errors found for edited frontend files.
+
+### Follow-Up: UI Function + Polish Opportunities
+
+Exploration notes:
+
+- Current Markets is functional, but event rows open every accordion by default and make the first viewport dense. The table also omits a side/action column, so users see model probability, bid/ask, and EV without a direct trade recommendation.
+- Model Overview has the right data, but the hierarchy is still metric-heavy. The expected-return chart works for the selected model+preset, but the visual language is more of a generic percentile bar than a clear expected-vs-downside/upside risk chart.
+- Risk preset management is in the combobox, but delete has no confirmation and custom presets do not explain when no model-card trial distribution exists for the chart.
+- Trading History is semantically correct as an empty executed-trade ledger, but the zero cards make the tab look like broken data instead of an intentional "trading not enabled yet" placeholder.
+- The scoring workflow is incomplete in the live shell: `useWorkstation` stores scored predictions, and `PredictionTable` / `ExecutionModeControl` already exist, but `ModelOverviewPage` never renders the scoring results or execution-mode control.
+
+Recommended next pass:
+
+- [x] Wire scoring results into Model Overview and expose execution mode next to the scoring controls.
+- [x] Improve Current Markets density: default only top opportunities open, add expand/collapse all, and add side/action badges to market rows.
+- [x] Redesign the expected-return chart into a clearer risk-return strip with a zero line, white expected marker, red downside ranges, blue upside ranges, and an empty state for custom presets without trials.
+- [x] Make Trading History look intentionally disabled until execution exists: replace fake zeros with "not live" language and a compact roadmap/status card.
+- [x] Add safer preset management: confirmation before delete and copy explaining session-only custom presets.
+
+Implementation checklist:
+
+- [x] Update `App.tsx` to pass `executionMode`, `setExecutionMode`, and `predictions` into Model Overview.
+- [x] Update `ModelOverviewPage.tsx` to render `ExecutionModeControl` and `PredictionTable` around the scoring panel.
+- [x] Update `CurrentMarketsPage.tsx` so initial load opens trade-bearing events only, includes expand/collapse all controls, and displays side badges in the event market table.
+- [x] Update `RiskReturnBandChart.tsx` to render a visible empty state for custom presets without trial distributions and sharpen the risk-return labels.
+- [x] Update `TradingHistoryPage.tsx` so the empty ledger reads as disabled/not-live instead of zeroed production data.
+- [x] Update `RiskPresetDropdown.tsx` to confirm preset deletion and explain session-only custom presets in the create dialog.
+- [x] Verify with `npm run build`, focused backend tests for touched API contracts, IDE lints, and Browser smoke testing.
+
+Verification:
+
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- `python -m pytest tests/test_market_poller.py tests/test_webapi_models.py`: 23 passed.
+- IDE diagnostics: no linter errors found for edited frontend files.
+- Browser smoke test: Current Markets loaded `12` events and `168` markets; only the two trade-bearing events opened by default, expand-all opened every event, and market rows showed the action/side badge column.
+- Browser smoke test: Model Overview showed execution controls, score sample produced a one-row `PredictionTable`, and the selected built-in preset rendered the clarified risk-return distribution.
+- Browser smoke test: Creating a `Balanced Copy` custom preset showed the "No trial distribution yet" chart empty state.
+- Browser smoke test: Risk preset delete now opens a confirmation dialog before removing the selected preset.
+- Browser smoke test: Trading History shows `Not live` execution status and roadmap copy instead of fake zero production metrics.
+- Code review found one stale-state issue: scored rows could remain visible after changing execution mode.
+- Fixed `useWorkstation` so changing execution mode or sample row clears old scored predictions.
+- `npm run build` in `kalorie2/web` after the stale-state fix: TypeScript and Vite production build completed.
+- IDE diagnostics after the stale-state fix: no linter errors found for edited frontend files.
+- Browser regression test after the stale-state fix: scored one sample row, switched from `All trades` to `NO-only`, and verified the prediction table cleared to `0 rows`.
+- Re-review found a pending-request race: a delayed score response could repopulate rows after the mode changed.
+- Fixed `useWorkstation` with request-version invalidation so stale score responses cannot update predictions, errors, or scoring state.
+- `npm run build` in `kalorie2/web` after async invalidation: TypeScript and Vite production build completed.
+- IDE diagnostics after async invalidation: no linter errors found for `useWorkstation`.
+- Browser async regression test: delayed `/score` responses by `2500ms`, clicked `Score sample`, switched to `NO-only` while the score request was pending, waited for the delayed response, and verified the prediction table remained at `0 rows`.
+- Code review found adjacent stale model-detail paths around model switching, same-model reselection, and in-flight detail responses.
+- Fixed `useWorkstation` with synchronous model-detail clearing on model switch, same-model select no-op, `detailRequestId` guards for stale `getModel`/`getSampleRows` responses, and disabled scoring while no model detail is loaded.
+- `npm run build` in `kalorie2/web` after final stale-state guards: TypeScript and Vite production build completed.
+- IDE diagnostics after final stale-state guards: no linter errors found for `useWorkstation`, `ScoringPanel`, or `ModelOverviewPage`.
+- Final code review: no important stale-state correctness issues found.
+
+### Follow-Up: Cached Prediction Runs + Portfolio Sizing
+
+Goal:
+
+- Keep prediction engines independent from risk tolerance changes.
+- Poll Kalshi bid/ask/market state regularly and rerun each prediction engine hourly.
+- Show portfolio/free-cash telemetry and dollar sizing for suggested trades.
+
+Implementation checklist:
+
+- [ ] Copy Kalshi auth env values from the existing `kalorie` env into `kalorie2/.env` without logging secrets.
+- [ ] Add authenticated Kalshi account read support for `/portfolio/balance` and optional `/portfolio/positions`.
+- [ ] Add a `GET /api/account/summary` endpoint with portfolio total, free cash, position exposure, and fallback/paper-bankroll state.
+- [ ] Split current market API flow so risk preset changes reapply the trading overlay to cached prediction rows instead of rerunning model inference.
+- [ ] Track two clocks in current-market snapshots: Kalshi market poll cadence and hourly prediction-engine rerun cadence.
+- [ ] Size suggested trades from authenticated free cash when available, otherwise `$100`; round down to whole contracts based on the contract cost.
+- [ ] Show `Kal: <bid/ask/market poll left>; Run: <prediction rerun left>` in the Current Markets poll box.
+- [ ] Show portfolio total and muted free cash telemetry in the top header.
+- [ ] Convert the three main tabs to a full-width segmented tab bar.
+- [ ] Browser smoke test Current Markets, risk tolerance switching, timers, sizing display, portfolio fallback/live state, and tab layout.
+
+Verification:
+
+- `python -m pytest tests/test_kalshi_account.py tests/test_market_poller.py tests/test_webapi_models.py -q`: 32 passed.
+- `python -m ruff check src/kalorie2/kalshi_account.py src/kalorie2/market_poller.py src/kalorie2/webapi/main.py tests/test_kalshi_account.py tests/test_webapi_models.py`: All checks passed.
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- IDE diagnostics: no linter errors found for edited backend/frontend files.
+- Browser smoke test: initial model run loaded `12` events and `168` markets; the header showed the `$100` paper bankroll fallback; full-width tabs rendered; the poll card showed `Kal` and `Run` timers; suggested trades displayed rounded dollar sizing and contract counts.
+- Browser smoke test: switching risk preset from `Balanced` to `Growth` kept the market board populated and called `/current-markets` with `refresh_markets=false`, avoiding a Kalshi market refetch and prediction-engine rerun.
+- Code review found account-auth gaps around `.env` loading, positions failures, and scalar balance parsing.
+- Fixed those account-auth gaps with regression tests; re-review found no remaining important issues.

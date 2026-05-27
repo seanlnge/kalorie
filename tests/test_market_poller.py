@@ -273,6 +273,83 @@ def test_active_market_source_uses_open_market_scan_for_missing_series_events() 
     assert rows[0].event_datetime == "2026-05-27T20:00:00Z"
 
 
+def test_active_market_source_hydrates_event_title_and_time_from_get_event() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/search/series":
+            return httpx.Response(200, json={"current_page": []})
+        if request.url.path == "/trade-api/v2/events/KXEARNINGSMENTIONANF-26MAY27":
+            return httpx.Response(
+                200,
+                json={
+                    "event": {
+                        "event_ticker": "KXEARNINGSMENTIONANF-26MAY27",
+                        "series_ticker": "KXEARNINGSMENTIONANF",
+                        "title": "Abercrombie earnings call",
+                        "sub_title": "On May 27, 2026",
+                    }
+                },
+            )
+        if request.url.path == "/trade-api/v2/events/KXEARNINGSMENTIONBBY-26MAY29":
+            return httpx.Response(
+                200,
+                json={
+                    "event": {
+                        "event_ticker": "KXEARNINGSMENTIONBBY-26MAY29",
+                        "series_ticker": "KXEARNINGSMENTIONBBY",
+                        "title": "Best Buy earnings call",
+                        "sub_title": "On May 29, 2026",
+                    }
+                },
+            )
+        if request.url.path == "/trade-api/v2/markets":
+            return httpx.Response(
+                200,
+                json={
+                    "markets": [
+                        {
+                            "ticker": "KXEARNINGSMENTIONBBY-26MAY29-AI",
+                            "event_ticker": "KXEARNINGSMENTIONBBY-26MAY29",
+                            "series_ticker": "KXEARNINGSMENTIONBBY",
+                            "event_title": "Stale market title",
+                            "title": "Best Buy market - AI",
+                            "custom_strike": {"Word": "AI"},
+                            "close_time": "2026-05-29T20:00:00Z",
+                            "yes_bid": 47,
+                            "yes_ask": 52,
+                            "volume": 500,
+                        },
+                        {
+                            "ticker": "KXEARNINGSMENTIONANF-26MAY27-AI",
+                            "event_ticker": "KXEARNINGSMENTIONANF-26MAY27",
+                            "series_ticker": "KXEARNINGSMENTIONANF",
+                            "event_title": "Stale market title",
+                            "title": "Abercrombie market - AI",
+                            "custom_strike": {"Word": "AI"},
+                            "close_time": "2026-05-27T20:00:00Z",
+                            "yes_bid": 47,
+                            "yes_ask": 52,
+                            "volume": 100,
+                        },
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    source = KalshiActiveMarketSource(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_pages=1,
+    )
+
+    rows = source.list_active_markets()
+
+    assert [row.event_ticker for row in rows] == [
+        "KXEARNINGSMENTIONANF-26MAY27",
+        "KXEARNINGSMENTIONBBY-26MAY29",
+    ]
+    assert rows[0].event_title == "Abercrombie earnings call"
+    assert rows[0].event_datetime == "2026-05-27T00:00:00Z"
+
+
 def test_default_poll_cache_root_is_inside_kalorie2_artifacts_runtime() -> None:
     assert default_poll_cache_root().parts[-3:] == ("artifacts", "runtime", "workstation")
     assert default_poll_cache_root().parent.parent.parent.name == "kalorie2"

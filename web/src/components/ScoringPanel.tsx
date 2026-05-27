@@ -8,6 +8,7 @@ export interface ScoringPanelProps {
   readonly sampleRows: readonly SampleRow[]
   readonly selectedRowIndex: number
   readonly scoring: boolean
+  readonly disabled?: boolean
   readonly onRowIndexChange: (rowIndex: number) => void
   readonly onScoreSample: () => Promise<void>
   readonly onScoreUpload: (file: File) => Promise<void>
@@ -17,6 +18,7 @@ export function ScoringPanel({
   sampleRows,
   selectedRowIndex,
   scoring,
+  disabled = false,
   onRowIndexChange,
   onScoreSample,
   onScoreUpload,
@@ -41,8 +43,9 @@ export function ScoringPanel({
             Sample row
             <select
               value={selectedRowIndex}
+              disabled={disabled}
               onChange={(event) => onRowIndexChange(Number(event.target.value))}
-              className="min-w-72 rounded-md border border-line bg-background px-3 py-3 font-mono text-sm text-foreground"
+              className="min-w-72 rounded-md border border-line bg-background px-3 py-3 font-mono text-sm text-foreground disabled:cursor-not-allowed disabled:opacity-50"
             >
               {sampleRows.map((row) => (
                 <option key={row.row_index} value={row.row_index}>
@@ -54,7 +57,7 @@ export function ScoringPanel({
           <button
             type="button"
             onClick={() => void onScoreSample()}
-            disabled={scoring || sampleRows.length === 0}
+            disabled={disabled || scoring || sampleRows.length === 0}
             className="inline-flex items-center gap-2 rounded-md bg-green px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-background transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Zap size={16} />
@@ -81,7 +84,7 @@ export function ScoringPanel({
           <button
             type="button"
             onClick={() => inputRef.current?.click()}
-            disabled={scoring}
+            disabled={disabled || scoring}
             className="inline-flex items-center gap-2 rounded-md border border-cyan/40 px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-cyan transition hover:bg-cyan/10 disabled:cursor-not-allowed disabled:opacity-50"
           >
             <UploadCloud size={16} />

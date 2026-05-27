@@ -86,6 +86,7 @@ class PollPredictionRow(MarketPollerBase):
     market_ticker: str
     event_ticker: str
     event_datetime: str | None = None
+    event_title: str = ""
     target_phrase: str
     model_name: str
     risk_preset_id: str | None = None
@@ -102,6 +103,8 @@ class PollPredictionRow(MarketPollerBase):
     recommended_fraction: float | None = None
     passes_risk_filter: bool | None = None
     volume: int = 0
+    recommended_dollars: float | None = None
+    recommended_contracts: int | None = None
 
 
 class MarketPollSnapshot(MarketPollerBase):
@@ -110,6 +113,11 @@ class MarketPollSnapshot(MarketPollerBase):
     risk_preset_id: str | None = None
     started_at: datetime
     completed_at: datetime
+    market_polled_at: datetime | None = None
+    model_run_started_at: datetime | None = None
+    model_run_completed_at: datetime | None = None
+    next_market_poll_at: datetime | None = None
+    next_model_run_at: datetime | None = None
     market_count: int
     prediction_count: int
     trade_count: int
@@ -150,6 +158,18 @@ class KalshiActiveMarketSource:
 
     def list_active_markets(self) -> list[ActiveMarketRow]:
         rows_by_ticker: dict[str, ActiveMarketRow] = {}
+        events_by_ticker: dict[str, dict[str, Any]] = {}
+
+        def hydrated_event_payload(event_payload: dict[str, Any]) -> dict[str, Any]:
+            event_ticker = str(event_payload.get("event_ticker") or "").strip()
+            if not event_ticker:
+                return event_payload
+            if event_ticker not in events_by_ticker:
+                events_by_ticker[event_ticker] = self._client.get_event(event_ticker)
+            hydrated = {**event_payload, **events_by_ticker[event_ticker]}
+            if events_by_ticker[event_ticker].get("title"):
+                hydrated["event_title"] = events_by_ticker[event_ticker]["title"]
+            return hydrated
 
         def upsert_row(row: ActiveMarketRow) -> None:
             existing = rows_by_ticker.get(row.market_ticker)
@@ -164,7 +184,7 @@ class KalshiActiveMarketSource:
 
         def collect_row(event_payload: dict[str, Any], market_payload: dict[str, Any]) -> None:
             row = normalize_active_market(
-                event_payload=event_payload,
+                event_payload=hydrated_event_payload(event_payload),
                 market_payload=market_payload,
             )
             if row is not None:
@@ -205,10 +225,6 @@ class KalshiActiveMarketSource:
                 "event_title": str(
                     market_payload.get("event_title") or market_payload.get("subtitle") or ""
                 ).strip(),
-                "close_time": market_payload.get("close_time"),
-                "expiration_time": market_payload.get("expiration_time"),
-                "latest_expiration_time": market_payload.get("latest_expiration_time"),
-                "expected_expiration_time": market_payload.get("expected_expiration_time"),
             }
             collect_row(event_payload, market_payload)
         rows = list(rows_by_ticker.values())
@@ -541,6 +557,7 @@ def _poll_row_from_score(
         market_ticker=market.market_ticker,
         event_ticker=market.event_ticker,
         event_datetime=market.event_datetime,
+        event_title=market.event_title,
         target_phrase=market.target_phrase,
         model_name=model_name,
         model_probability=score_row.model_probability,
@@ -639,14 +656,8 @@ def _event_datetime_iso(
     event_payload: dict[str, Any],
     market_payload: dict[str, Any],
 ) -> str | None:
-    for key in (
-        "close_time",
-        "expiration_time",
-        "latest_expiration_time",
-        "expected_expiration_time",
-        "open_time",
-    ):
-        parsed = _parse_datetime_iso(market_payload.get(key))
+    for key in ("event_subtitle", "sub_title", "subtitle"):
+        parsed = _event_subtitle_datetime_iso(event_payload.get(key))
         if parsed:
             return parsed
     for key in (
@@ -659,6 +670,31 @@ def _event_datetime_iso(
         parsed = _parse_datetime_iso(event_payload.get(key))
         if parsed:
             return parsed
+    for key in (
+        "close_time",
+        "expiration_time",
+        "latest_expiration_time",
+        "expected_expiration_time",
+        "open_time",
+    ):
+        parsed = _parse_datetime_iso(market_payload.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
+def _event_subtitle_datetime_iso(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text.lower().startswith("on "):
+        return None
+    for pattern in ("On %B %d, %Y", "On %b %d, %Y"):
+        try:
+            parsed = datetime.strptime(text, pattern).replace(tzinfo=UTC)
+        except ValueError:
+            continue
+        return parsed.isoformat().replace("+00:00", "Z")
     return None
 
 

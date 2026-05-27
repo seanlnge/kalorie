@@ -105,6 +105,115 @@ def test_risk_presets_endpoint_returns_available_policy_overlays(tmp_path: Path)
     assert presets[1]["min_margin"] > 0
 
 
+def test_account_summary_endpoint_uses_paper_bankroll_without_auth(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
+    monkeypatch.delenv("KALSHI_API_KEY", raising=False)
+    monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    response = client.get("/api/account/summary")
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["available"] is False
+    assert summary["source"] == "paper"
+    assert summary["bankroll"] == 100.0
+
+
+def test_account_summary_endpoint_uses_authenticated_balance(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeAccountClient:
+        @classmethod
+        def from_env(cls, *, http_client: object) -> "FakeAccountClient":
+            return cls()
+
+        def get_balance(self) -> dict[str, object]:
+            return {"balance": {"portfolio_value": 240_00, "available_balance": 180_00}}
+
+        def list_positions(self) -> dict[str, object]:
+            return {"market_positions": [{"ticker": "A", "market_exposure": 12_00}]}
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiAccountClient", FakeAccountClient)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    response = client.get("/api/account/summary")
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["available"] is True
+    assert summary["source"] == "kalshi"
+    assert summary["portfolio_value"] == 240.0
+    assert summary["free_cash"] == 180.0
+    assert summary["position_exposure"] == 12.0
+    assert summary["bankroll"] == 180.0
+
+
+def test_account_summary_keeps_balance_when_positions_fail(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeAccountClient:
+        @classmethod
+        def from_env(cls, *, http_client: object) -> "FakeAccountClient":
+            return cls()
+
+        def get_balance(self) -> dict[str, object]:
+            return {"balance": {"portfolio_value": 240_00, "available_balance": 180_00}}
+
+        def list_positions(self) -> dict[str, object]:
+            raise RuntimeError("positions unavailable")
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiAccountClient", FakeAccountClient)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    response = client.get("/api/account/summary")
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["available"] is True
+    assert summary["source"] == "kalshi"
+    assert summary["free_cash"] == 180.0
+    assert summary["bankroll"] == 180.0
+    assert summary["position_exposure"] is None
+
+
+def test_create_app_loads_env_file_for_account_auth(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    env_path = tmp_path / ".env"
+    env_path.write_text("KALSHI_API_KEY=from-file\n", encoding="utf-8")
+    monkeypatch.delenv("KALSHI_API_KEY", raising=False)
+
+    class FakeAccountClient:
+        @classmethod
+        def from_env(cls, *, http_client: object) -> "FakeAccountClient | None":
+            if "KALSHI_API_KEY" not in __import__("os").environ:
+                return None
+            return cls()
+
+        def get_balance(self) -> dict[str, object]:
+            return {"balance": {"available_balance": 120_00}}
+
+        def list_positions(self) -> dict[str, object]:
+            return {"market_positions": []}
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiAccountClient", FakeAccountClient)
+    client = TestClient(create_app(models_root=tmp_path, env_path=env_path))
+
+    response = client.get("/api/account/summary")
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["available"] is True
+    assert summary["free_cash"] == 120.0
+
+
 def test_sample_rows_endpoint_returns_training_csv_preview(tmp_path: Path) -> None:
     _write_api_bundle(tmp_path)
     client = TestClient(create_app(models_root=tmp_path))
@@ -342,8 +451,6 @@ def test_current_markets_endpoint_accepts_custom_risk_preset_body(
                 "kelly_fraction": 0.25,
                 "max_position_fraction": 0.02,
                 "max_event_exposure_fraction": 0.08,
-                "risk_of_ruin_estimate": 0.01,
-                "risk_of_ruin_label": "Low",
             }
         },
     )
@@ -352,6 +459,175 @@ def test_current_markets_endpoint_accepts_custom_risk_preset_body(
     row = response.json()["snapshot"]["prediction_rows"][0]
     assert row["risk_preset_id"] == "custom-tight"
     assert row["recommended_fraction"] == 0.02
+
+
+def test_current_markets_reuses_cached_predictions_when_only_risk_changes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_api_bundle(tmp_path, side="NO")
+
+    class FakeActiveMarketSource:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def list_active_markets(self) -> list[ActiveMarketRow]:
+            return [
+                ActiveMarketRow(
+                    market_ticker="MARKET-1",
+                    event_ticker="EVENT-1",
+                    series_ticker="KXEARNINGSMENTIONTEST",
+                    event_title="Event",
+                    market_title="Market",
+                    target_phrase="AI",
+                    yes_bid=0.42,
+                    yes_ask=0.45,
+                    yes_mid=0.435,
+                    volume=100,
+                )
+            ]
+
+    class FakeScorer:
+        calls = 0
+
+        def __init__(self, *, models_root: Path) -> None:
+            self.models_root = models_root
+
+        def score_active_markets(
+            self, markets: list[ActiveMarketRow], *, model_name: str
+        ) -> list[PollPredictionRow]:
+            type(self).calls += 1
+            market = markets[0]
+            return [
+                PollPredictionRow(
+                    market_ticker=market.market_ticker,
+                    event_ticker=market.event_ticker,
+                    target_phrase=market.target_phrase,
+                    model_name=model_name,
+                    model_probability=0.35,
+                    market_probability=market.yes_mid,
+                    yes_bid=market.yes_bid,
+                    yes_ask=market.yes_ask,
+                    residual_delta=-0.08,
+                    side="NONE",
+                    edge=0,
+                    cost=0,
+                    volume=market.volume,
+                )
+            ]
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiActiveMarketSource", FakeActiveMarketSource)
+    monkeypatch.setattr("kalorie2.webapi.main.CachedSavedModelMarketScorer", FakeScorer)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    first_response = client.post("/api/models/unit-model/current-markets?risk_preset_id=balanced")
+    second_response = client.post(
+        "/api/models/unit-model/current-markets",
+        json={
+            "risk_preset": {
+                "id": "custom-wide",
+                "label": "Custom Wide",
+                "description": "Custom preset",
+                "trade_side": "no_only",
+                "min_margin": 0.2,
+                "kelly_fraction": 0.25,
+                "max_position_fraction": 0.02,
+                "max_event_exposure_fraction": 0.08,
+            }
+        },
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert FakeScorer.calls == 1
+    second_snapshot = second_response.json()["snapshot"]
+    assert second_snapshot["risk_preset_id"] == "custom-wide"
+    assert second_snapshot["prediction_rows"][0]["risk_preset_id"] == "custom-wide"
+
+
+def test_current_markets_can_reapply_risk_without_refetching_kalshi_markets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_api_bundle(tmp_path, side="NO")
+
+    class FakeActiveMarketSource:
+        calls = 0
+
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def list_active_markets(self) -> list[ActiveMarketRow]:
+            type(self).calls += 1
+            return [
+                ActiveMarketRow(
+                    market_ticker="MARKET-1",
+                    event_ticker="EVENT-1",
+                    series_ticker="KXEARNINGSMENTIONTEST",
+                    event_title="Event",
+                    market_title="Market",
+                    target_phrase="AI",
+                    yes_bid=0.42,
+                    yes_ask=0.45,
+                    yes_mid=0.435,
+                    volume=100,
+                )
+            ]
+
+    class FakeScorer:
+        calls = 0
+
+        def __init__(self, *, models_root: Path) -> None:
+            self.models_root = models_root
+
+        def score_active_markets(
+            self, markets: list[ActiveMarketRow], *, model_name: str
+        ) -> list[PollPredictionRow]:
+            type(self).calls += 1
+            market = markets[0]
+            return [
+                PollPredictionRow(
+                    market_ticker=market.market_ticker,
+                    event_ticker=market.event_ticker,
+                    target_phrase=market.target_phrase,
+                    model_name=model_name,
+                    model_probability=0.35,
+                    market_probability=market.yes_mid,
+                    yes_bid=market.yes_bid,
+                    yes_ask=market.yes_ask,
+                    residual_delta=-0.08,
+                    side="NONE",
+                    edge=0,
+                    cost=0,
+                    volume=market.volume,
+                )
+            ]
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiActiveMarketSource", FakeActiveMarketSource)
+    monkeypatch.setattr("kalorie2.webapi.main.CachedSavedModelMarketScorer", FakeScorer)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    first_response = client.post("/api/models/unit-model/current-markets?risk_preset_id=balanced")
+    second_response = client.post(
+        "/api/models/unit-model/current-markets?refresh_markets=false",
+        json={
+            "risk_preset": {
+                "id": "custom-wide",
+                "label": "Custom Wide",
+                "description": "Custom preset",
+                "trade_side": "no_only",
+                "min_margin": 0.2,
+                "kelly_fraction": 0.25,
+                "max_position_fraction": 0.02,
+                "max_event_exposure_fraction": 0.08,
+            }
+        },
+    )
+
+    assert first_response.status_code == 200
+    assert second_response.status_code == 200
+    assert FakeActiveMarketSource.calls == 1
+    assert FakeScorer.calls == 1
 
 
 def _write_poll_snapshot(

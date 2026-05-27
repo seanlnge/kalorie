@@ -200,6 +200,16 @@ class KalshiMentionClient:
             raise KalshiClientError("Kalshi historical market response missing market object")
         return market
 
+    def get_event(self, event_ticker: str) -> dict:
+        response = self._get_path(f"/events/{event_ticker}", allowed_statuses={404})
+        if response.status_code == 404:
+            return {}
+        payload = response.json()
+        event = payload.get("event", payload)
+        if not isinstance(event, dict):
+            raise KalshiClientError("Kalshi event response missing event object")
+        return event
+
     def get_market_candlesticks(
         self,
         *,

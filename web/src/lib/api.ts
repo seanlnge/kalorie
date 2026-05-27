@@ -1,4 +1,5 @@
 import type {
+  AccountSummary,
   ExecutionMode,
   PollPredictionRow,
   PollSnapshot,
@@ -27,6 +28,11 @@ export async function listModels(): Promise<SavedModelMetadata[]> {
 export async function listRiskPresets(): Promise<RiskPreset[]> {
   const payload = await request<{ risk_presets: RiskPreset[] }>('/api/risk-presets')
   return payload.risk_presets
+}
+
+export async function getAccountSummary(): Promise<AccountSummary> {
+  const payload = await request<{ summary: AccountSummary }>('/api/account/summary')
+  return payload.summary
 }
 
 export async function getModel(modelName: string): Promise<SavedModelMetadata> {
@@ -80,8 +86,15 @@ export async function getLatestTrades(): Promise<PollPredictionRow[]> {
   return payload.trades
 }
 
-export async function getCurrentMarkets(modelName: string, riskPreset: RiskPreset): Promise<PollSnapshot> {
-  const params = new URLSearchParams({ risk_preset_id: riskPreset.id })
+export async function getCurrentMarkets(
+  modelName: string,
+  riskPreset: RiskPreset,
+  options: { readonly refreshMarkets?: boolean } = {},
+): Promise<PollSnapshot> {
+  const params = new URLSearchParams({
+    risk_preset_id: riskPreset.id,
+    refresh_markets: String(options.refreshMarkets ?? true),
+  })
   const payload = await request<{ snapshot: PollSnapshot }>(
     `/api/models/${encodeURIComponent(modelName)}/current-markets?${params.toString()}`,
     {
