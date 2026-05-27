@@ -186,12 +186,11 @@ function PortfolioReadout({ summary }: { readonly summary: AccountSummary }) {
       ? `Free ${formatDollars(summary.free_cash)}`
       : `Sizing ${formatDollars(summary.bankroll)}`
   return (
-    <div className="flex flex-wrap items-baseline gap-3 rounded-lg border border-line bg-background/60 px-3 py-2">
+    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-background/60 px-3 py-2">
       <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
         Portfolio
       </span>
       <span className="font-mono text-lg font-semibold text-foreground">{portfolioLabel}</span>
-      <span className="font-mono text-xs text-muted">{freeCashLabel}</span>
     </div>
   )
 }

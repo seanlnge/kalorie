@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
+import pytest
 from typer.testing import CliRunner
 
 from kalorie2.market_poller import (
@@ -17,6 +18,7 @@ from kalorie2.market_poller import (
     app,
     default_poll_cache_root,
     normalize_active_market,
+    poll_loop_command,
     preferred_model_name,
 )
 
@@ -387,6 +389,54 @@ def test_load_env_file_sets_missing_keys_only(tmp_path: Path, monkeypatch) -> No
     assert Path(env_path).exists()
     assert __import__("os").environ["OPENAI_API_KEY"] == "test-key"
     assert __import__("os").environ["EXISTING"] == "kept"
+
+
+def test_poll_loop_sleeps_and_retries_after_transient_poll_failure(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_bundle(tmp_path, "unit-model")
+
+    class StopLoop(BaseException):
+        pass
+
+    class FakeScorer:
+        def __init__(self, **_: object) -> None:
+            pass
+
+    class FakePoller:
+        calls = 0
+
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def run_once(self, *, model_name: str):
+            type(self).calls += 1
+            request = httpx.Request("GET", "https://example.test/markets")
+            response = httpx.Response(429, request=request)
+            raise httpx.HTTPStatusError("rate limited", request=request, response=response)
+
+    sleep_calls: list[int] = []
+
+    def fake_sleep(seconds: int) -> None:
+        sleep_calls.append(seconds)
+        raise StopLoop
+
+    monkeypatch.setattr("kalorie2.market_poller.CachedSavedModelMarketScorer", FakeScorer)
+    monkeypatch.setattr("kalorie2.market_poller.ActiveMarketPoller", FakePoller)
+    monkeypatch.setattr("kalorie2.market_poller.time.sleep", fake_sleep)
+
+    with pytest.raises(StopLoop):
+        poll_loop_command(
+            model_name="unit-model",
+            models_root=tmp_path,
+            cache_root=tmp_path / "cache",
+            interval_seconds=7,
+            live_web_evidence=False,
+        )
+
+    assert FakePoller.calls == 1
+    assert sleep_calls == [7]
 
 
 def test_openai_web_evidence_source_fetches_per_event(monkeypatch) -> None:

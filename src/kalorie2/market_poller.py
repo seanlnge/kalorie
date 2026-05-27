@@ -530,20 +530,23 @@ def poll_loop_command(
     )
     cache_store = MarketPollCacheStore(root=cache_root)
     while True:
-        with httpx.Client(timeout=30) as http_client:
-            poller = ActiveMarketPoller(
-                market_source=KalshiActiveMarketSource(
-                    http_client=http_client,
-                    max_pages=max_pages,
-                ),
-                scorer=scorer,
-                cache_store=cache_store,
+        try:
+            with httpx.Client(timeout=30) as http_client:
+                poller = ActiveMarketPoller(
+                    market_source=KalshiActiveMarketSource(
+                        http_client=http_client,
+                        max_pages=max_pages,
+                    ),
+                    scorer=scorer,
+                    cache_store=cache_store,
+                )
+                snapshot = poller.run_once(model_name=resolved_model_name)
+            typer.echo(
+                f"Poll {snapshot.poll_id}: {snapshot.prediction_count} predictions, "
+                f"{snapshot.trade_count} trade opportunities"
             )
-            snapshot = poller.run_once(model_name=resolved_model_name)
-        typer.echo(
-            f"Poll {snapshot.poll_id}: {snapshot.prediction_count} predictions, "
-            f"{snapshot.trade_count} trade opportunities"
-        )
+        except Exception as exc:  # noqa: BLE001
+            typer.echo(f"Poll iteration failed; retrying in {interval_seconds}s: {exc}", err=True)
         time.sleep(interval_seconds)
 
 

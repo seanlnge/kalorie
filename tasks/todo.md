@@ -1160,3 +1160,26 @@ Verification:
 - Browser smoke test: switching risk preset from `Balanced` to `Growth` kept the market board populated and called `/current-markets` with `refresh_markets=false`, avoiding a Kalshi market refetch and prediction-engine rerun.
 - Code review found account-auth gaps around `.env` loading, positions failures, and scalar balance parsing.
 - Fixed those account-auth gaps with regression tests; re-review found no remaining important issues.
+
+### Follow-Up: Poller Rate Limit Resilience
+
+Root cause:
+
+- The background poller hit Kalshi `429 Too Many Requests` while paging `/markets`.
+- `KalshiMentionClient` retried the request and then raised `httpx.HTTPStatusError` after exhausting retries.
+- `poll_loop_command` did not catch per-iteration failures, so the poller process exited.
+- `start-stack.ps1` stops the whole stack when any child process exits, so a transient Kalshi rate limit killed both API and web.
+
+Implementation checklist:
+
+- [x] Add a regression proving `poll_loop_command` does not propagate a one-iteration Kalshi/API failure.
+- [x] Catch poll loop iteration failures, log a concise warning, sleep the configured interval, and retry.
+- [x] Verify focused poller tests and ruff.
+
+Verification:
+
+- `python -m pytest tests/test_market_poller.py::test_poll_loop_sleeps_and_retries_after_transient_poll_failure -q`: failed before the fix with `httpx.HTTPStatusError: rate limited`.
+- `python -m pytest tests/test_market_poller.py::test_poll_loop_sleeps_and_retries_after_transient_poll_failure -q`: passed after the fix.
+- `python -m pytest tests/test_market_poller.py -q`: 13 passed.
+- `python -m ruff check src/kalorie2/market_poller.py tests/test_market_poller.py`: All checks passed.
+- IDE diagnostics: no linter errors found for edited poller files.
