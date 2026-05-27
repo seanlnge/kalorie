@@ -894,7 +894,7 @@ Refocus the web app around the three workflows that matter now: current active m
 
 Add Windows PowerShell and POSIX shell entrypoints that start the local Kalorie2 development stack and cleanly tear down every child process on Ctrl+C or script exit.
 
-### Plan
+### Work Checklist
 
 - [x] Create `start-stack.ps1` at the `kalorie2/` root.
 - [x] Create `start-stack.sh` at the `kalorie2/` root.
@@ -909,3 +909,96 @@ Add Windows PowerShell and POSIX shell entrypoints that start the local Kalorie2
 - PowerShell parser accepted `start-stack.ps1`.
 - Bash parser accepted `start-stack.sh`.
 - Fixed Bash line endings to LF so POSIX shells can parse the script.
+
+## Web GUI Current-Market Coverage + Event-Time Sorting
+
+### Plan
+
+- [x] Confirm where active-market rows are filtered before rendering `Current Markets` / `Model Overview`.
+- [x] Make active-market discovery more complete so mention markets missed by search-series hydration still appear in poll snapshots.
+- [x] Carry event datetime metadata from Kalshi market payloads into cached poll rows.
+- [x] Sort grouped current-market events by the Kalshi event datetime and show that datetime in each event header.
+- [x] Remove the top status strip that shows read-only + active model + train time + poll cache.
+- [x] Re-run relevant backend/frontend tests and build checks.
+
+### Outcome
+
+- Added a full open-market scan merge in `KalshiActiveMarketSource` so `KXEARNINGSMENTION*` markets discovered outside search-series hydration are still included.
+- Added `event_datetime` propagation from market payloads into poll snapshots (`PollPredictionRow`) and frontend row typing.
+- Updated `CurrentMarketsPage` to sort events by datetime and render `Kalshi event time ...` in each event group header.
+- Removed `TopStatusBar` from `App` so the read-only/model/poll strip no longer appears.
+
+## Web GUI Live Polling + Accordion Controls
+
+### Work Checklist
+
+- [x] Add a model-scoped current-market scoring API endpoint and frontend polling loop that re-runs inference every minute.
+- [x] Ensure model switching clears stale inference rows and shows skeleton-dot loading until new inference completes.
+- [x] Add clickable event accordions with event-level summary stats (total EV and spread aggregates).
+- [x] Rename the top Current Markets metric to "Since last polled" and render elapsed-time text.
+- [x] Remove top hero boxes from Current Markets, Trading History, and Model Overview pages.
+- [x] Hide the full scored/raw model-overview window and relabel latest split output to "Testing suite results".
+- [x] Add EV/10 markets wherever EV/10 trades is currently displayed.
+- [x] Update stack startup script defaults to 60-second polling.
+
+### Outcome
+
+- Added `POST /api/models/{model_name}/current-markets` to score fresh active markets on demand.
+- Added `useLiveCurrentMarkets` hook with completion-based one-minute polling and immediate refresh support.
+- Current Markets now supports accordion collapse/expand, per-event total EV, total spread, and average spread.
+- Current Markets status now shows relative elapsed time since the last completed poll.
+- Removed top tab hero boxes and removed the full JSON/scored window from Model Overview.
+- Model card and model picker now expose both EV/10 trades and EV/10 markets.
+- Switching models now clears current inference rows and renders skeleton-dot placeholders until the new model returns.
+
+## Risk Preset Overlay
+
+### Work Checklist
+
+- [x] Add risk preset contracts and pure decision/sizing tests.
+- [x] Expose risk presets and apply selected preset in current-market scoring API.
+- [x] Generate and parse risk preset trial distributions for model overview.
+- [x] Add risk preset dropdown and pass selection through live polling.
+- [x] Add risk overview cards and expected-return percentile chart while removing ROI% UI.
+- [x] Run focused backend tests, Ruff, frontend build, and lints.
+
+### Outcome
+
+- Added `capital_preservation`, `balanced`, and `growth` risk overlays with min-margin, side policy, fractional Kelly sizing, position/event caps, and risk-of-ruin metadata.
+- Current-market scoring now keeps saved-model probabilities as model output, then applies the selected risk preset as the trading-policy layer.
+- Model-card generation can emit per-preset expected-return-per-market distributions with p10/p25/expected/p75/p90 bands.
+- The web UI now loads risk presets into a nav dropdown, sends the selected preset to live inference, clears stale rows on preset changes, and shows selected risk settings in Model Overview.
+- Frontend ROI display language was removed; Model Overview now shows risk preset summaries and a custom SVG expected-return-per-market chart.
+
+### Verification
+
+- `python -m pytest tests/test_risk_presets.py tests/test_model_cards.py tests/test_saved_models.py tests/test_webapi_models.py`: 26 passed.
+- `python -m ruff check src/kalorie2/risk_presets.py src/kalorie2/model_cards.py src/kalorie2/model_card_cli.py src/kalorie2/market_poller.py src/kalorie2/webapi/main.py tests/test_risk_presets.py tests/test_model_cards.py tests/test_webapi_models.py`: All checks passed.
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+- IDE diagnostics: no linter errors found for edited TypeScript/TSX files.
+
+### Follow-Up: Predictive-Only Model Cards
+
+- [x] Remove execution policy, min margin, trading ROI, trade count, and EV fields from the generated model-card schema.
+- [x] Move risk-preset trial distributions into `artifacts/risk-preset-trials.json` as a separate overlay artifact.
+- [x] Update saved-model metadata so frontend consumers receive model-card predictive metrics and risk-trial overlays as separate fields.
+- [x] Update model picker and Model Overview to show predictive quality from model cards, while selected risk preset details come from the risk overlay.
+- [x] Capture the boundary lesson in `tasks/lessons.md`.
+
+Verification:
+
+- `python -m pytest tests/test_model_cards.py tests/test_saved_models.py tests/test_webapi_models.py tests/test_risk_presets.py`: 26 passed.
+- `python -m ruff check src/kalorie2/model_cards.py src/kalorie2/model_card_cli.py src/kalorie2/risk_trials.py src/kalorie2/risk_presets.py src/kalorie2/saved_models.py tests/test_model_cards.py tests/test_saved_models.py`: All checks passed.
+- `npm run build` in `kalorie2/web`: TypeScript and Vite production build completed.
+
+## Shadcn Selector + Risk Preset Management UI
+
+### Work Checklist
+
+- [ ] Add minimal shadcn-style combobox and alert-dialog primitives for the workstation controls.
+- [ ] Replace model and risk preset native selects with searchable comboboxes.
+- [ ] Move compact model/risk stats under each combobox trigger instead of beside it.
+- [ ] Add create/name/delete preset actions in the risk selector section, backed by an alert dialog form.
+- [ ] Auto-reconcile preset fields after edits so min margin, Kelly, caps, and risk-of-ruin descriptor stay coherent.
+- [ ] Split Model Overview into predictive model information on the left and selected risk preset information on the right.
+- [ ] Run frontend build and IDE lints.

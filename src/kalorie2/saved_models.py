@@ -39,13 +39,13 @@ class SavedModelEvaluationSnapshot(SavedModelBase):
 class SavedModelCardPreview(SavedModelBase):
     split_name: str
     role: str | None = None
-    policy: str | None = None
-    trade_count: int | None = None
     market_count: int | None = None
-    trade_percent: float | None = None
     brier: float | None = None
-    roi_on_cost: float | None = None
-    ev_per_10_trades: float | None = None
+    market_brier: float | None = None
+    ece: float | None = None
+    market_ece: float | None = None
+    log_loss: float | None = None
+    market_log_loss: float | None = None
 
 
 class SavedModelMetadata(SavedModelBase):
@@ -62,6 +62,7 @@ class SavedModelMetadata(SavedModelBase):
     artifact_paths: dict[str, str] = Field(default_factory=dict)
     model_card: dict[str, Any] | None = None
     model_card_preview: SavedModelCardPreview | None = None
+    risk_preset_trials: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class SavedModelScoreRow(SavedModelBase):
@@ -111,6 +112,9 @@ class SavedModelRegistry:
             model_dir / "artifacts" / "evaluation-reports.json"
         )
         model_card = _read_optional_json(model_dir / "artifacts" / "model-card.json") or None
+        risk_trials_payload = _read_optional_json(
+            model_dir / "artifacts" / "risk-preset-trials.json"
+        )
         readme = (model_dir / "README.md").read_text(encoding="utf-8")
 
         model_block = _dict(model_payload.get("model"))
@@ -147,6 +151,7 @@ class SavedModelRegistry:
             artifact_paths=_artifact_paths(model_dir),
             model_card=model_card,
             model_card_preview=_model_card_preview(model_card),
+            risk_preset_trials=_risk_preset_trials(risk_trials_payload),
         )
 
 
@@ -253,6 +258,7 @@ def _artifact_paths(model_dir: Path) -> dict[str, str]:
         "training_manifest": model_dir / "artifacts" / "training-manifest.json",
         "evaluation_reports": model_dir / "artifacts" / "evaluation-reports.json",
         "model_card": model_dir / "artifacts" / "model-card.json",
+        "risk_preset_trials": model_dir / "artifacts" / "risk-preset-trials.json",
     }
     return {
         name: str(path.relative_to(model_dir)).replace("\\", "/")
@@ -316,50 +322,30 @@ def _model_card_preview(payload: dict[str, Any] | None) -> SavedModelCardPreview
     splits = payload.get("evaluation_splits")
     if not isinstance(splits, list):
         return None
-    default_policy = _optional_str(payload.get("default_execution_policy"))
-    split = _primary_model_card_split(splits, default_policy=default_policy)
+    split = _primary_model_card_split(splits)
     if split is None:
         return None
     metrics = _dict(split.get("metrics"))
-    trade_count = _optional_int(_metric_value(metrics, "trade_count"))
     market_count = _optional_int(split.get("market_count"))
-    total_cost = _optional_float(_metric_value(metrics, "total_cost"))
-    total_pnl = _optional_float(_metric_value(metrics, "total_pnl"))
-    roi_on_cost = _optional_float(_metric_value(metrics, "roi_on_cost"))
-    ev_per_10_trades = _ev_per_10_trades(
-        roi_on_cost=roi_on_cost,
-        total_cost=total_cost,
-        total_pnl=total_pnl,
-        trade_count=trade_count,
-    )
     return SavedModelCardPreview(
         split_name=str(split.get("name") or "evaluation"),
         role=_optional_str(split.get("role")),
-        policy=_optional_str(split.get("policy")),
-        trade_count=trade_count,
         market_count=market_count,
-        trade_percent=trade_count / market_count
-        if trade_count is not None and market_count
-        else None,
         brier=_optional_float(_metric_value(metrics, "brier")),
-        roi_on_cost=roi_on_cost,
-        ev_per_10_trades=ev_per_10_trades,
+        market_brier=_optional_float(_metric_value(metrics, "market_brier")),
+        ece=_optional_float(_metric_value(metrics, "ece")),
+        market_ece=_optional_float(_metric_value(metrics, "market_ece")),
+        log_loss=_optional_float(_metric_value(metrics, "log_loss")),
+        market_log_loss=_optional_float(_metric_value(metrics, "market_log_loss")),
     )
 
 
 def _primary_model_card_split(
     splits: list[Any],
-    *,
-    default_policy: str | None,
 ) -> dict[str, Any] | None:
     split_dicts = [split for split in splits if isinstance(split, dict)]
     if not split_dicts:
         return None
-    for split in split_dicts:
-        if split.get("role") == "test" and (
-            default_policy is None or split.get("policy") == default_policy
-        ):
-            return split
     for split in split_dicts:
         if split.get("role") == "test":
             return split
@@ -373,20 +359,11 @@ def _metric_value(metrics: dict[str, Any], metric_name: str) -> Any:
     return metric
 
 
-def _ev_per_10_trades(
-    *,
-    roi_on_cost: float | None,
-    total_cost: float | None,
-    total_pnl: float | None,
-    trade_count: int | None,
-) -> float | None:
-    if not trade_count:
-        return None
-    if roi_on_cost is not None and total_cost is not None:
-        return (roi_on_cost * total_cost / trade_count) * 10
-    if total_pnl is not None:
-        return (total_pnl / trade_count) * 10
-    return None
+def _risk_preset_trials(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    trials = payload.get("risk_preset_trials")
+    if not isinstance(trials, list):
+        return []
+    return [trial for trial in trials if isinstance(trial, dict)]
 
 
 def _model_sort_key(model: SavedModelMetadata) -> tuple[int, str, str]:

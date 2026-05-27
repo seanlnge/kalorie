@@ -1,5 +1,3 @@
-import { History } from 'lucide-react'
-
 import { PollPredictionTable } from '@/components/PollPredictionTable'
 import { formatInteger } from '@/lib/format'
 import type { PollSnapshot } from '@/lib/types'
@@ -14,20 +12,6 @@ export function TradingHistoryPage({ history }: TradingHistoryPageProps) {
 
   return (
     <section className="space-y-4">
-      <div className="rounded-lg border border-line bg-panelStrong/80 p-5 shadow-terminal">
-        <p className="flex items-center gap-2 font-mono text-[10px] uppercase tracking-[0.28em] text-green">
-          <History size={14} />
-          Trading History
-        </p>
-        <h1 className="mt-2 font-display text-3xl font-semibold tracking-tight">
-          Bot decision history
-        </h1>
-        <p className="mt-3 max-w-3xl text-sm leading-6 text-muted">
-          Cached trade candidates from each poll. This is intentionally read-only decision history
-          until real Kalshi execution/fill records are wired in.
-        </p>
-      </div>
-
       <div className="grid gap-3 md:grid-cols-4">
         <HistoryMetric label="Polls" value={formatInteger(history.length)} />
         <HistoryMetric label="Trade candidates" value={formatInteger(totalTrades)} tone="text-green" />

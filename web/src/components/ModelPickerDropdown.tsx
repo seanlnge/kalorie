@@ -1,7 +1,18 @@
-import { ChevronDown } from 'lucide-react'
+import { Check, ChevronsUpDown } from 'lucide-react'
+import { useState } from 'react'
 
-import { formatProbability, formatSigned } from '@/lib/format'
+import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import type { SavedModelMetadata } from '@/lib/types'
+import { cn } from '@/lib/utils'
 
 export interface ModelPickerDropdownProps {
   readonly models: readonly SavedModelMetadata[]
@@ -14,39 +25,67 @@ export function ModelPickerDropdown({
   selectedModelName,
   onSelect,
 }: ModelPickerDropdownProps) {
+  const [open, setOpen] = useState(false)
   const selected = models.find((model) => model.name === selectedModelName) ?? models[0] ?? null
   const preview = selected?.model_card_preview
 
   return (
-    <label className="min-w-0">
+    <div className="min-w-0">
       <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
         Model
       </span>
-      <div className="grid gap-2 lg:grid-cols-[minmax(17rem,24rem)_auto]">
-        <div className="relative">
-          <select
-            value={selectedModelName ?? ''}
-            onChange={(event) => onSelect(event.target.value)}
-            className="h-full w-full appearance-none rounded-md border border-line bg-background px-3 py-3 pr-9 font-mono text-sm font-semibold text-foreground shadow-terminal"
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button
+            type="button"
+            variant="outline"
+            role="combobox"
+            aria-expanded={open}
+            className="h-12 w-full justify-between rounded-md border-line bg-background px-3 text-left normal-case tracking-normal"
           >
-            {models.map((model) => (
-              <option key={model.name} value={model.name}>
-                {model.name}
-              </option>
-            ))}
-          </select>
-          <ChevronDown
-            className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-muted"
-            size={16}
-          />
-        </div>
-        <div className="grid grid-cols-3 overflow-hidden rounded-md border border-line bg-panel/80">
-          <PreviewCell label="Trade %" value={formatProbability(preview?.trade_percent)} />
-          <PreviewCell label="Brier" value={preview?.brier?.toFixed(4) ?? '--'} />
-          <PreviewCell label="EV / 10" value={formatSigned(preview?.ev_per_10_trades)} tone="text-green" />
-        </div>
+            <span className="truncate font-mono text-sm font-semibold">
+              {selected?.name ?? 'Select model'}
+            </span>
+            <ChevronsUpDown size={15} className="shrink-0 text-muted" />
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent className="w-[min(32rem,calc(100vw-2rem))] p-0">
+          <Command>
+            <CommandInput placeholder="Search models..." />
+            <CommandList>
+              <CommandEmpty>No model found.</CommandEmpty>
+              <CommandGroup heading="Saved models">
+                {models.map((model) => (
+                  <CommandItem
+                    key={model.name}
+                    value={model.name}
+                    onSelect={() => {
+                      onSelect(model.name)
+                      setOpen(false)
+                    }}
+                  >
+                    <Check
+                      size={14}
+                      className={cn(
+                        'text-cyan',
+                        selectedModelName === model.name ? 'opacity-100' : 'opacity-0',
+                      )}
+                    />
+                    <span className="truncate">{model.name}</span>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
+      <div className="mt-2 grid grid-cols-4 overflow-hidden rounded-md border border-line bg-panel/80">
+        <PreviewCell label="Brier" value={preview?.brier?.toFixed(4) ?? '--'} />
+        <PreviewCell label="Market" value={preview?.market_brier?.toFixed(4) ?? '--'} />
+        <PreviewCell label="ECE" value={preview?.ece?.toFixed(4) ?? '--'} />
+        <PreviewCell label="Log loss" value={preview?.log_loss?.toFixed(4) ?? '--'} />
       </div>
-    </label>
+    </div>
   )
 }
 

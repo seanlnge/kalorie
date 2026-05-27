@@ -1,5 +1,5 @@
-from datetime import UTC, datetime
 import json
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -126,6 +126,7 @@ def test_normalize_active_market_builds_runtime_compatible_market_row() -> None:
             "ticker": "KXEARNINGSMENTIONAAPL-26APR30-AI",
             "title": "What will Apple say during their next earnings call? - AI",
             "custom_strike": {"Word": "AI"},
+            "close_time": "2026-04-30T20:00:00Z",
             "yes_bid": 37,
             "yes_ask": 40,
             "volume": 123,
@@ -138,6 +139,7 @@ def test_normalize_active_market_builds_runtime_compatible_market_row() -> None:
     assert row.yes_bid == 0.37
     assert row.yes_ask == 0.4
     assert row.yes_mid == 0.385
+    assert row.event_datetime == "2026-04-30T20:00:00Z"
     assert row.to_runtime_row()["preclose_yes_mid"] == "0.385"
     assert row.to_runtime_row()["word_said"] == "AI"
 
@@ -228,6 +230,47 @@ def test_active_market_source_falls_back_to_event_markets_when_search_has_no_mar
     rows = source.list_active_markets()
 
     assert [row.market_ticker for row in rows] == ["KXEARNINGSMENTIONAAPL-26APR30-AI"]
+
+
+def test_active_market_source_uses_open_market_scan_for_missing_series_events() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/search/series":
+            return httpx.Response(200, json={"current_page": []})
+        if request.url.path == "/trade-api/v2/markets":
+            return httpx.Response(
+                200,
+                json={
+                    "markets": [
+                        {
+                            "ticker": "KXEARNINGSMENTIONANF-26MAY27-AI",
+                            "event_ticker": "KXEARNINGSMENTIONANF-26MAY27",
+                            "series_ticker": "KXEARNINGSMENTIONANF",
+                            "event_title": (
+                                "What will Abercrombie say during their next earnings call?"
+                            ),
+                            "title": (
+                                "What will Abercrombie say during their next earnings call? - AI"
+                            ),
+                            "custom_strike": {"Word": "AI"},
+                            "close_time": "2026-05-27T20:00:00Z",
+                            "yes_bid": 47,
+                            "yes_ask": 52,
+                            "volume": 321,
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404)
+
+    source = KalshiActiveMarketSource(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_pages=1,
+    )
+
+    rows = source.list_active_markets()
+
+    assert [row.market_ticker for row in rows] == ["KXEARNINGSMENTIONANF-26MAY27-AI"]
+    assert rows[0].event_datetime == "2026-05-27T20:00:00Z"
 
 
 def test_default_poll_cache_root_is_inside_kalorie2_artifacts_runtime() -> None:

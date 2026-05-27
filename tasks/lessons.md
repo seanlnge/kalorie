@@ -37,3 +37,7 @@ For Responses API runs that use web search and frontier reasoning models, do not
 ## 2026-05-26: Use absolute source paths in process launchers
 
 When a launcher starts child Python processes, set `PYTHONPATH` to an absolute `src` path rather than a relative `src`. In Git Bash/MSYS on Windows, convert that path with `cygpath -w` before handing it to Windows Python. Child process working-directory and environment inheritance can differ from the parent shell's assumptions, and import failures should be caught by actually starting the launcher, not just parser checks.
+
+## 2026-05-27: Keep model cards predictive-only
+
+Do not put execution policy, minimum margin, ROI, trade selection, Kelly sizing, or other risk-tolerance assumptions inside saved model cards or model creation. Model cards should evaluate probability quality; trading overlays and expected-return distributions belong in separate risk preset artifacts/UI fields.

@@ -6,9 +6,10 @@ import type { PollPredictionRow } from '@/lib/types'
 export interface PollPredictionTableProps {
   readonly rows: readonly PollPredictionRow[]
   readonly emptyMessage: string
+  readonly loading?: boolean
 }
 
-export function PollPredictionTable({ rows, emptyMessage }: PollPredictionTableProps) {
+export function PollPredictionTable({ rows, emptyMessage, loading = false }: PollPredictionTableProps) {
   const orderedRows = [...rows].sort((left, right) => Math.abs(right.edge) - Math.abs(left.edge))
 
   return (
@@ -32,7 +33,7 @@ export function PollPredictionTable({ rows, emptyMessage }: PollPredictionTableP
           {orderedRows.length === 0 ? (
             <tr>
               <td colSpan={10} className="px-4 py-10 text-center text-muted">
-                {emptyMessage}
+                {loading ? <SkeletonDots /> : emptyMessage}
               </td>
             </tr>
           ) : (
@@ -71,6 +72,17 @@ export function PollPredictionTable({ rows, emptyMessage }: PollPredictionTableP
         </tbody>
       </table>
     </div>
+  )
+}
+
+function SkeletonDots() {
+  return (
+    <span className="inline-flex items-center gap-2 font-mono text-sm text-muted">
+      <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-line" />
+      <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-line [animation-delay:160ms]" />
+      <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-line [animation-delay:320ms]" />
+      Running model inference...
+    </span>
   )
 }
 

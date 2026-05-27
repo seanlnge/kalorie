@@ -44,6 +44,7 @@ class ActiveMarketRow(MarketPollerBase):
     market_ticker: str
     event_ticker: str
     series_ticker: str
+    event_datetime: str | None = None
     event_title: str
     market_title: str
     target_phrase: str
@@ -84,8 +85,10 @@ class ActiveMarketRow(MarketPollerBase):
 class PollPredictionRow(MarketPollerBase):
     market_ticker: str
     event_ticker: str
+    event_datetime: str | None = None
     target_phrase: str
     model_name: str
+    risk_preset_id: str | None = None
     model_probability: float
     market_probability: float
     yes_bid: float
@@ -94,12 +97,17 @@ class PollPredictionRow(MarketPollerBase):
     side: TradeSide | str
     edge: float
     cost: float
+    ev_per_contract: float | None = None
+    kelly_fraction_raw: float | None = None
+    recommended_fraction: float | None = None
+    passes_risk_filter: bool | None = None
     volume: int = 0
 
 
 class MarketPollSnapshot(MarketPollerBase):
     poll_id: str
     model_name: str
+    risk_preset_id: str | None = None
     started_at: datetime
     completed_at: datetime
     market_count: int
@@ -141,7 +149,27 @@ class KalshiActiveMarketSource:
         self._max_pages = max_pages
 
     def list_active_markets(self) -> list[ActiveMarketRow]:
-        rows: list[ActiveMarketRow] = []
+        rows_by_ticker: dict[str, ActiveMarketRow] = {}
+
+        def upsert_row(row: ActiveMarketRow) -> None:
+            existing = rows_by_ticker.get(row.market_ticker)
+            if existing is None:
+                rows_by_ticker[row.market_ticker] = row
+                return
+            if row.volume > existing.volume:
+                rows_by_ticker[row.market_ticker] = row
+                return
+            if existing.event_datetime is None and row.event_datetime is not None:
+                rows_by_ticker[row.market_ticker] = row
+
+        def collect_row(event_payload: dict[str, Any], market_payload: dict[str, Any]) -> None:
+            row = normalize_active_market(
+                event_payload=event_payload,
+                market_payload=market_payload,
+            )
+            if row is not None:
+                upsert_row(row)
+
         for event_payload in self._client.iter_mention_series(
             status="open",
             category="Mentions",
@@ -164,13 +192,34 @@ class KalshiActiveMarketSource:
             for market_payload in raw_markets:
                 if not isinstance(market_payload, dict):
                     continue
-                row = normalize_active_market(
-                    event_payload=event_payload,
-                    market_payload=market_payload,
-                )
-                if row is not None:
-                    rows.append(row)
-        return sorted(rows, key=lambda row: (-row.volume, row.market_ticker))
+                collect_row(event_payload, market_payload)
+        for market_payload in self._client.iter_markets(
+            status="open",
+            historical=False,
+            limit=200,
+            max_pages=self._max_pages,
+        ):
+            event_payload = {
+                "event_ticker": str(market_payload.get("event_ticker") or "").strip(),
+                "series_ticker": str(market_payload.get("series_ticker") or "").strip(),
+                "event_title": str(
+                    market_payload.get("event_title") or market_payload.get("subtitle") or ""
+                ).strip(),
+                "close_time": market_payload.get("close_time"),
+                "expiration_time": market_payload.get("expiration_time"),
+                "latest_expiration_time": market_payload.get("latest_expiration_time"),
+                "expected_expiration_time": market_payload.get("expected_expiration_time"),
+            }
+            collect_row(event_payload, market_payload)
+        rows = list(rows_by_ticker.values())
+        return sorted(
+            rows,
+            key=lambda row: (
+                _event_datetime_sort_key(row.event_datetime),
+                -row.volume,
+                row.market_ticker,
+            ),
+        )
 
 
 class CachedSavedModelMarketScorer:
@@ -383,6 +432,7 @@ def normalize_active_market(
         market_ticker=market_ticker,
         event_ticker=event_ticker,
         series_ticker=series_ticker,
+        event_datetime=_event_datetime_iso(event_payload, market_payload),
         event_title=event_title,
         market_title=market_title,
         target_phrase=target_phrase,
@@ -399,7 +449,9 @@ def poll_once_command(
     models_root: Annotated[Path | None, typer.Option()] = None,
     cache_root: Annotated[Path | None, typer.Option()] = None,
     max_pages: Annotated[int | None, typer.Option()] = None,
-    live_web_evidence: Annotated[bool, typer.Option("--live-web-evidence/--no-live-web-evidence")] = True,
+    live_web_evidence: Annotated[
+        bool, typer.Option("--live-web-evidence/--no-live-web-evidence")
+    ] = True,
     web_search_model: Annotated[str, typer.Option()] = "gpt-5.4-mini",
     web_search_timeout_seconds: Annotated[float, typer.Option(min=1.0)] = 120.0,
 ) -> None:
@@ -438,7 +490,9 @@ def poll_loop_command(
     cache_root: Annotated[Path | None, typer.Option()] = None,
     interval_seconds: Annotated[int, typer.Option(min=1)] = 600,
     max_pages: Annotated[int | None, typer.Option()] = None,
-    live_web_evidence: Annotated[bool, typer.Option("--live-web-evidence/--no-live-web-evidence")] = True,
+    live_web_evidence: Annotated[
+        bool, typer.Option("--live-web-evidence/--no-live-web-evidence")
+    ] = True,
     web_search_model: Annotated[str, typer.Option()] = "gpt-5.4-mini",
     web_search_timeout_seconds: Annotated[float, typer.Option(min=1.0)] = 120.0,
 ) -> None:
@@ -486,6 +540,7 @@ def _poll_row_from_score(
     return PollPredictionRow(
         market_ticker=market.market_ticker,
         event_ticker=market.event_ticker,
+        event_datetime=market.event_datetime,
         target_phrase=market.target_phrase,
         model_name=model_name,
         model_probability=score_row.model_probability,
@@ -578,6 +633,55 @@ def _price_probability(payload: dict[str, Any], key: str) -> float | None:
 
 def _format_probability(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".")
+
+
+def _event_datetime_iso(
+    event_payload: dict[str, Any],
+    market_payload: dict[str, Any],
+) -> str | None:
+    for key in (
+        "close_time",
+        "expiration_time",
+        "latest_expiration_time",
+        "expected_expiration_time",
+        "open_time",
+    ):
+        parsed = _parse_datetime_iso(market_payload.get(key))
+        if parsed:
+            return parsed
+    for key in (
+        "close_time",
+        "expiration_time",
+        "latest_expiration_time",
+        "expected_expiration_time",
+        "open_time",
+    ):
+        parsed = _parse_datetime_iso(event_payload.get(key))
+        if parsed:
+            return parsed
+    return None
+
+
+def _parse_datetime_iso(value: object) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed.isoformat().replace("+00:00", "Z")
+
+
+def _event_datetime_sort_key(value: str | None) -> datetime:
+    parsed = _parse_datetime_iso(value)
+    if parsed is None:
+        return datetime.max.replace(tzinfo=UTC)
+    return datetime.fromisoformat(parsed.replace("Z", "+00:00"))
 
 
 def _company_name_from_event_title(event_title: str) -> str:

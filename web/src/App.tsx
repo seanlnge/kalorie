@@ -1,27 +1,72 @@
 import { AlertTriangle } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 
 import { CurrentMarketsPage } from '@/components/CurrentMarketsPage'
 import { ModelOverviewPage } from '@/components/ModelOverviewPage'
 import { ModelPickerDropdown } from '@/components/ModelPickerDropdown'
-import { TopStatusBar } from '@/components/TopStatusBar'
+import { RiskPresetDropdown } from '@/components/RiskPresetDropdown'
 import { TradingHistoryPage } from '@/components/TradingHistoryPage'
+import { useLiveCurrentMarkets } from '@/hooks/useLiveCurrentMarkets'
 import { usePollSnapshot } from '@/hooks/usePollSnapshot'
 import { useWorkstation } from '@/hooks/useWorkstation'
+import { listRiskPresets } from '@/lib/api'
+import type { RiskPreset } from '@/lib/types'
 
 type ViewId = 'markets' | 'history' | 'model'
 
 function App() {
   const workstation = useWorkstation()
   const pollSnapshot = usePollSnapshot()
+  const [riskPresets, setRiskPresets] = useState<RiskPreset[]>([])
+  const [selectedRiskPresetId, setSelectedRiskPresetId] = useState<string | null>(null)
+  const [riskPresetError, setRiskPresetError] = useState<string | null>(null)
+  const selectedRiskPreset =
+    riskPresets.find((preset) => preset.id === selectedRiskPresetId) ?? riskPresets[0] ?? null
+  const currentMarkets = useLiveCurrentMarkets(workstation.selectedModelName, selectedRiskPreset)
   const [activeView, setActiveView] = useState<ViewId>('markets')
+
+  useEffect(() => {
+    let cancelled = false
+    listRiskPresets()
+      .then((presets) => {
+        if (cancelled) return
+        setRiskPresets(presets)
+        setSelectedRiskPresetId((current) => current ?? 'balanced')
+      })
+      .catch((err: unknown) => {
+        if (!cancelled) {
+          setRiskPresetError(err instanceof Error ? err.message : 'Failed to load risk presets')
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const createRiskPreset = (preset: RiskPreset) => {
+    setRiskPresets((current) => {
+      const withoutDuplicate = current.filter((entry) => entry.id !== preset.id)
+      return [...withoutDuplicate, preset]
+    })
+    setSelectedRiskPresetId(preset.id)
+  }
+
+  const deleteRiskPreset = (presetId: string) => {
+    setRiskPresets((current) => {
+      if (current.length <= 1) return current
+      return current.filter((preset) => preset.id !== presetId)
+    })
+    setSelectedRiskPresetId((current) => {
+      if (current !== presetId) return current
+      return riskPresets.find((preset) => preset.id !== presetId)?.id ?? null
+    })
+  }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       <div className="mx-auto flex min-h-screen w-full max-w-[1500px] flex-col bg-background/72">
-        <TopStatusBar selectedModel={workstation.selectedModel} pollSnapshot={pollSnapshot.snapshot} />
         <header className="border-b border-line bg-panel/78 px-4 py-4 shadow-terminal">
-          <div className="flex flex-col gap-4 xl:flex-row xl:items-end xl:justify-between">
+          <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
             <div>
               <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-cyan">
                 Kalorie institutional terminal
@@ -30,11 +75,20 @@ function App() {
                 Earnings mention market workstation
               </h1>
             </div>
-            <ModelPickerDropdown
-              models={workstation.models}
-              selectedModelName={workstation.selectedModelName}
-              onSelect={workstation.selectModel}
-            />
+            <div className="grid gap-3 xl:grid-cols-2">
+              <ModelPickerDropdown
+                models={workstation.models}
+                selectedModelName={workstation.selectedModelName}
+                onSelect={workstation.selectModel}
+              />
+              <RiskPresetDropdown
+                presets={riskPresets}
+                selectedPresetId={selectedRiskPreset?.id ?? null}
+                onSelect={setSelectedRiskPresetId}
+                onCreate={createRiskPreset}
+                onDelete={deleteRiskPreset}
+              />
+            </div>
           </div>
           <nav className="mt-4 flex flex-wrap gap-2">
             <ViewButton
@@ -60,13 +114,15 @@ function App() {
             <SystemNotice tone="cyan" message="Scanning top-level models/* for valid saved bundles..." />
           ) : null}
           {workstation.error ? <SystemNotice tone="amber" message={workstation.error} /> : null}
+          {riskPresetError ? <SystemNotice tone="amber" message={riskPresetError} /> : null}
           {pollSnapshot.error ? <SystemNotice tone="amber" message={pollSnapshot.error} /> : null}
+          {currentMarkets.error ? <SystemNotice tone="amber" message={currentMarkets.error} /> : null}
 
           {activeView === 'markets' ? (
             <CurrentMarketsPage
-              snapshot={pollSnapshot.snapshot}
-              loading={pollSnapshot.loading}
-              onRefresh={() => void pollSnapshot.refresh()}
+              snapshot={currentMarkets.snapshot}
+              loading={currentMarkets.loading}
+              onRefresh={currentMarkets.refresh}
             />
           ) : null}
 
@@ -77,15 +133,12 @@ function App() {
           {activeView === 'model' ? (
             <ModelOverviewPage
               model={workstation.selectedModel}
+              riskPreset={selectedRiskPreset}
               sampleRows={workstation.sampleRows}
               selectedRowIndex={workstation.selectedRowIndex}
               scoring={workstation.scoring}
-              predictions={workstation.predictions}
-              currentMarketRows={
-                pollSnapshot.snapshot?.model_name === workstation.selectedModelName
-                  ? pollSnapshot.snapshot.prediction_rows
-                  : []
-              }
+              currentMarketRows={currentMarkets.snapshot?.prediction_rows ?? []}
+              currentMarketsLoading={currentMarkets.loading}
               onRowIndexChange={workstation.setSelectedRowIndex}
               onScoreSample={workstation.scoreSelectedRow}
               onScoreUpload={workstation.scoreUploadedCsv}

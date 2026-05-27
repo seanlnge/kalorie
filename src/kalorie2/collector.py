@@ -148,10 +148,34 @@ class KalshiMentionClient:
         historical: bool = True,
         limit: int = 200,
     ) -> Iterator[dict]:
+        yield from self.iter_markets(
+            status=status,
+            historical=historical,
+            limit=limit,
+            event_ticker=event_ticker,
+        )
+
+    def iter_markets(
+        self,
+        *,
+        status: str | None = None,
+        historical: bool = False,
+        limit: int = 200,
+        event_ticker: str | None = None,
+        series_ticker: str | None = None,
+        max_pages: int | None = None,
+    ) -> Iterator[dict]:
         path = "/historical/markets" if historical else "/markets"
         cursor: str | None = None
+        pages_seen = 0
         while True:
-            params: dict[str, str | int] = {"event_ticker": event_ticker, "limit": limit}
+            if max_pages is not None and pages_seen >= max_pages:
+                return
+            params: dict[str, str | int] = {"limit": limit}
+            if event_ticker:
+                params["event_ticker"] = event_ticker
+            if series_ticker:
+                params["series_ticker"] = series_ticker
             if not historical and status:
                 params["status"] = status
             if cursor:
@@ -162,6 +186,7 @@ class KalshiMentionClient:
             if not isinstance(markets, list):
                 raise KalshiClientError("Kalshi markets response missing markets list")
             yield from (market for market in markets if isinstance(market, dict))
+            pages_seen += 1
             next_cursor = payload.get("cursor")
             if not next_cursor:
                 return

@@ -1,5 +1,20 @@
 export type ExecutionMode = 'all' | 'no_only'
 
+export type RiskTradeSide = 'all' | 'no_only' | 'yes_only'
+
+export interface RiskPreset {
+  id: string
+  label: string
+  description: string
+  trade_side: RiskTradeSide
+  min_margin: number
+  kelly_fraction: number
+  max_position_fraction: number
+  max_event_exposure_fraction: number
+  risk_of_ruin_estimate: number
+  risk_of_ruin_label: string
+}
+
 export interface TrainingSummary {
   row_count?: number | null
   event_count?: number | null
@@ -37,22 +52,45 @@ export interface ModelCardEvaluationSplit {
   role: string
   event_count: number
   market_count: number
-  policy: string
-  margin: number
   metrics: Record<string, ModelCardMetricValue>
   notes?: string | null
+}
+
+export interface ReturnPercentileBand {
+  p10: number
+  p25: number
+  expected: number
+  p75: number
+  p90: number
+}
+
+export interface RiskPresetTrial {
+  risk_preset_id: string
+  label: string
+  trade_side: RiskTradeSide
+  min_margin: number
+  kelly_fraction: number
+  max_position_fraction: number
+  max_event_exposure_fraction: number
+  risk_of_ruin_estimate: number
+  risk_of_ruin_label: string
+  trade_count: number
+  market_count: number
+  trade_percent: number
+  ev_per_10_markets: number
+  expected_return_per_market: ReturnPercentileBand
 }
 
 export interface ModelCardPreview {
   split_name: string
   role?: string | null
-  policy?: string | null
-  trade_count?: number | null
   market_count?: number | null
-  trade_percent?: number | null
   brier?: number | null
-  roi_on_cost?: number | null
-  ev_per_10_trades?: number | null
+  market_brier?: number | null
+  ece?: number | null
+  market_ece?: number | null
+  log_loss?: number | null
+  market_log_loss?: number | null
 }
 
 export interface ModelCard {
@@ -60,8 +98,6 @@ export interface ModelCard {
   model_name: string
   model_version?: number | null
   model_type: string
-  default_execution_policy: string
-  default_margin: number
   training_data: Record<string, number | string | null>
   feature_set: Record<string, number | string | string[] | null>
   evaluation_splits: ModelCardEvaluationSplit[]
@@ -83,6 +119,7 @@ export interface SavedModelMetadata {
   artifact_paths: Record<string, string>
   model_card?: ModelCard | null
   model_card_preview?: ModelCardPreview | null
+  risk_preset_trials: RiskPresetTrial[]
 }
 
 export interface SampleRow {
@@ -118,8 +155,10 @@ export interface ScoreResponse {
 export interface PollPredictionRow {
   market_ticker: string
   event_ticker: string
+  event_datetime?: string | null
   target_phrase: string
   model_name: string
+  risk_preset_id?: string | null
   model_probability: number
   market_probability: number
   yes_bid: number
@@ -128,12 +167,17 @@ export interface PollPredictionRow {
   side: 'YES' | 'NO' | 'NONE' | string
   edge: number
   cost: number
+  ev_per_contract?: number | null
+  kelly_fraction_raw?: number | null
+  recommended_fraction?: number | null
+  passes_risk_filter?: boolean | null
   volume: number
 }
 
 export interface PollSnapshot {
   poll_id: string
   model_name: string
+  risk_preset_id?: string | null
   started_at: string
   completed_at: string
   market_count: number

@@ -2,11 +2,17 @@ import json
 
 from kalorie2.model_cards import (
     ConfidenceInterval,
+    EvaluationRow,
     EvaluationSplit,
     MetricValue,
     ModelCard,
+    build_evaluation_split,
     build_model_card_schema,
+    latest_event_rows,
+    parse_iso_utc,
 )
+from kalorie2.risk_presets import get_risk_preset
+from kalorie2.risk_trials import build_risk_preset_trials
 
 
 def test_model_card_schema_requires_latest30_test_metrics() -> None:
@@ -14,8 +20,6 @@ def test_model_card_schema_requires_latest30_test_metrics() -> None:
         model_name="kalorie-v3",
         model_version=3,
         model_type="market_anchored_linear_residual",
-        default_execution_policy="no_only",
-        default_margin=0.02,
         training_data={
             "row_count": 3500,
             "event_count": 264,
@@ -33,15 +37,7 @@ def test_model_card_schema_requires_latest30_test_metrics() -> None:
                 role="test",
                 event_count=30,
                 market_count=380,
-                policy="no_only",
-                margin=0.02,
                 metrics={
-                    "roi_on_cost": MetricValue(
-                        value=0.293532,
-                        unit="ratio",
-                        ci95=ConfidenceInterval(low=0.05, high=0.52),
-                    ),
-                    "trade_count": MetricValue(value=35, unit="count"),
                     "brier": MetricValue(
                         value=0.162254,
                         ci95=ConfidenceInterval(low=0.13, high=0.19),
@@ -63,8 +59,6 @@ def test_model_card_schema_requires_latest30_test_metrics() -> None:
     latest30 = card.primary_test_split
 
     assert latest30.name == "latest30"
-    assert latest30.metrics["roi_on_cost"].ci95 is not None
-    assert latest30.metrics["trade_count"].value == 35
     assert latest30.metrics["log_loss"].ci95 is not None
 
 
@@ -73,4 +67,139 @@ def test_build_model_card_schema_exports_json_schema() -> None:
 
     assert schema["title"] == "ModelCard"
     assert "evaluation_splits" in schema["properties"]
+    assert "default_execution_policy" not in schema["properties"]
+    assert "default_margin" not in schema["properties"]
+    assert "risk_preset_trials" not in schema["properties"]
     assert json.dumps(schema)
+
+
+def test_latest_event_rows_keeps_recent_events_only() -> None:
+    rows = [
+        EvaluationRow(
+            event_ticker="E1",
+            close_time=parse_iso_utc("2026-01-01T00:00:00Z"),
+            outcome_label=1,
+            market_probability=0.5,
+            model_probability=0.6,
+            yes_bid=0.49,
+            yes_ask=0.51,
+        ),
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.4,
+            model_probability=0.3,
+            yes_bid=0.39,
+            yes_ask=0.41,
+        ),
+        EvaluationRow(
+            event_ticker="E3",
+            close_time=parse_iso_utc("2026-01-03T00:00:00Z"),
+            outcome_label=1,
+            market_probability=0.7,
+            model_probability=0.8,
+            yes_bid=0.69,
+            yes_ask=0.71,
+        ),
+    ]
+
+    latest = latest_event_rows(rows, event_count=2)
+
+    assert {row.event_ticker for row in latest} == {"E2", "E3"}
+
+
+def test_build_evaluation_split_includes_latest30_metrics_with_ci() -> None:
+    rows = [
+        EvaluationRow(
+            event_ticker="E1",
+            close_time=parse_iso_utc("2026-01-01T00:00:00Z"),
+            outcome_label=1,
+            market_probability=0.6,
+            model_probability=0.7,
+            yes_bid=0.59,
+            yes_ask=0.61,
+        ),
+        EvaluationRow(
+            event_ticker="E1",
+            close_time=parse_iso_utc("2026-01-01T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.4,
+            model_probability=0.3,
+            yes_bid=0.39,
+            yes_ask=0.41,
+        ),
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=1,
+            market_probability=0.55,
+            model_probability=0.8,
+            yes_bid=0.54,
+            yes_ask=0.56,
+        ),
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.45,
+            model_probability=0.2,
+            yes_bid=0.44,
+            yes_ask=0.46,
+        ),
+    ]
+
+    split = build_evaluation_split(
+        rows,
+        name="latest30",
+        role="test",
+        bootstrap_samples=200,
+        bootstrap_seed=7,
+    )
+
+    assert split.name == "latest30"
+    assert split.role == "test"
+    assert "roi_on_cost" not in split.metrics
+    assert "trade_count" not in split.metrics
+    assert split.metrics["brier"].ci95 is not None
+    assert split.metrics["ece"].ci95 is not None
+    assert split.metrics["log_loss"].ci95 is not None
+
+
+def test_build_risk_preset_trials_exports_expected_return_percentile_bands() -> None:
+    rows = [
+        EvaluationRow(
+            event_ticker="E1",
+            close_time=parse_iso_utc("2026-01-01T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.42,
+            model_probability=0.35,
+            yes_bid=0.42,
+            yes_ask=0.45,
+        ),
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=1,
+            market_probability=0.55,
+            model_probability=0.61,
+            yes_bid=0.54,
+            yes_ask=0.57,
+        ),
+    ]
+
+    trials = build_risk_preset_trials(
+        rows,
+        presets=[get_risk_preset("balanced")],
+        bootstrap_samples=100,
+        bootstrap_seed=11,
+    )
+
+    assert len(trials) == 1
+    trial = trials[0]
+    assert trial.risk_preset_id == "balanced"
+    assert trial.trade_percent > 0
+    assert trial.ev_per_10_markets > 0
+    assert trial.expected_return_per_market.p10 <= trial.expected_return_per_market.expected
+    assert trial.expected_return_per_market.p25 <= trial.expected_return_per_market.p75
+    assert trial.expected_return_per_market.p90 >= trial.expected_return_per_market.expected

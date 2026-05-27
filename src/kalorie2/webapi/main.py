@@ -2,15 +2,30 @@ from __future__ import annotations
 
 import json
 import tempfile
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal
 
+import httpx
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
-from kalorie2.market_poller import MarketPollCacheStore, default_poll_cache_root
+from kalorie2.market_poller import (
+    CachedSavedModelMarketScorer,
+    KalshiActiveMarketSource,
+    MarketPollCacheStore,
+    MarketPollSnapshot,
+    default_poll_cache_root,
+)
+from kalorie2.risk_presets import (
+    RiskPreset,
+    apply_risk_preset_to_market,
+    get_risk_preset,
+    list_risk_presets,
+)
 from kalorie2.saved_models import (
     SavedModelRegistry,
     SavedModelScorer,
@@ -18,6 +33,12 @@ from kalorie2.saved_models import (
 )
 
 ExecutionMode = Literal["all", "no_only"]
+
+
+class CurrentMarketsRiskRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    risk_preset: RiskPreset | None = None
 
 
 def create_app(
@@ -37,6 +58,9 @@ def create_app(
     app.state.poll_cache_root = poll_cache_root or default_poll_cache_root()
     app.state.registry = SavedModelRegistry(models_root=app.state.models_root)
     app.state.poll_cache_store = MarketPollCacheStore(root=app.state.poll_cache_root)
+    app.state.current_market_scorer = CachedSavedModelMarketScorer(
+        models_root=app.state.models_root
+    )
 
     @app.get("/api/models")
     def list_models() -> JSONResponse:
@@ -53,6 +77,16 @@ def create_app(
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         return JSONResponse({"model": model.model_dump(mode="json")})
+
+    @app.get("/api/risk-presets")
+    def risk_presets() -> JSONResponse:
+        return JSONResponse(
+            {
+                "risk_presets": [
+                    preset.model_dump(mode="json") for preset in list_risk_presets()
+                ]
+            }
+        )
 
     @app.get("/api/models/{model_name}/sample-rows")
     def sample_rows(model_name: str, limit: int = 10) -> JSONResponse:
@@ -121,7 +155,81 @@ def create_app(
             {"snapshots": [snapshot.model_dump(mode="json") for snapshot in snapshots]}
         )
 
+    @app.post("/api/models/{model_name}/current-markets")
+    def score_current_markets(
+        model_name: str,
+        risk_preset_id: str = "balanced",
+        max_pages: int | None = 3,
+        risk_request: CurrentMarketsRiskRequest | None = Body(default=None),
+    ) -> JSONResponse:
+        registry: SavedModelRegistry = app.state.registry
+        try:
+            registry.model_dir(model_name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if risk_request and risk_request.risk_preset:
+            risk_preset = risk_request.risk_preset
+        else:
+            try:
+                risk_preset = get_risk_preset(risk_preset_id)
+            except KeyError as exc:
+                raise HTTPException(status_code=404, detail=str(exc)) from exc
+        scorer: CachedSavedModelMarketScorer = app.state.current_market_scorer
+        started_at = datetime.now(tz=UTC)
+        try:
+            with httpx.Client(timeout=30) as http_client:
+                market_source = KalshiActiveMarketSource(
+                    http_client=http_client,
+                    max_pages=max_pages,
+                )
+                markets = market_source.list_active_markets()
+            prediction_rows = scorer.score_active_markets(markets, model_name=model_name)
+            prediction_rows = [
+                _apply_risk_preset_to_poll_row(row, risk_preset=risk_preset)
+                for row in prediction_rows
+            ]
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=502, detail=f"Failed to score current markets: {exc}"
+            ) from exc
+        completed_at = datetime.now(tz=UTC)
+        trade_rows = [row for row in prediction_rows if row.side in {"YES", "NO"}]
+        snapshot = MarketPollSnapshot(
+            poll_id=f"{started_at:%Y%m%d-%H%M%S}",
+            model_name=model_name,
+            risk_preset_id=risk_preset.id,
+            started_at=started_at,
+            completed_at=completed_at,
+            market_count=len(markets),
+            prediction_count=len(prediction_rows),
+            trade_count=len(trade_rows),
+            prediction_rows=prediction_rows,
+            trade_rows=trade_rows,
+        )
+        return JSONResponse({"snapshot": snapshot.model_dump(mode="json")})
+
     return app
+
+
+def _apply_risk_preset_to_poll_row(row, *, risk_preset: RiskPreset):
+    decision = apply_risk_preset_to_market(
+        preset=risk_preset,
+        model_probability=row.model_probability,
+        yes_bid=row.yes_bid,
+        yes_ask=row.yes_ask,
+    )
+    return row.model_copy(
+        update={
+            "risk_preset_id": risk_preset.id,
+            "side": decision.side,
+            "edge": decision.edge,
+            "cost": decision.cost,
+            "ev_per_contract": decision.ev_per_contract,
+            "kelly_fraction_raw": decision.kelly_fraction_raw,
+            "recommended_fraction": decision.recommended_fraction,
+            "passes_risk_filter": decision.passes_filter,
+        }
+    )
 
 
 def run() -> None:

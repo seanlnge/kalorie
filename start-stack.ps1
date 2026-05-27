@@ -1,7 +1,7 @@
 param(
     [int]$ApiPort = 8000,
     [int]$WebPort = 5173,
-    [int]$PollIntervalSeconds = 600,
+    [int]$PollIntervalSeconds = 60,
     [string]$ModelName = "",
     [switch]$NoPoller
 )

@@ -116,8 +116,6 @@ def test_registry_parses_model_card_and_computed_picker_preview(tmp_path: Path) 
             "model_name": "card-model",
             "model_type": "market_anchored_linear_residual",
             "model_version": 7,
-            "default_execution_policy": "no_only",
-            "default_margin": 0.02,
             "training_data": {"row_count": 10, "event_count": 2},
             "feature_set": {"feature_count": 3},
             "evaluation_splits": [
@@ -126,17 +124,43 @@ def test_registry_parses_model_card_and_computed_picker_preview(tmp_path: Path) 
                     "role": "test",
                     "event_count": 30,
                     "market_count": 380,
-                    "policy": "no_only",
-                    "margin": 0.02,
                     "metrics": {
-                        "trade_count": {"value": 35},
-                        "roi_on_cost": {"value": 0.293532},
-                        "total_cost": {"value": 20.1},
-                        "total_pnl": {"value": 5.9},
                         "brier": {"value": 0.162254},
+                        "market_brier": {"value": 0.163622},
+                        "ece": {"value": 0.05507},
+                        "log_loss": {"value": 0.487541},
                     },
                 }
             ],
+        },
+    )
+    _write_json(
+        model_dir / "artifacts" / "risk-preset-trials.json",
+        {
+            "risk_preset_trials": [
+                {
+                    "risk_preset_id": "balanced",
+                    "label": "Balanced",
+                    "trade_side": "no_only",
+                    "min_margin": 0.02,
+                    "kelly_fraction": 0.5,
+                    "max_position_fraction": 0.05,
+                    "max_event_exposure_fraction": 0.12,
+                    "risk_of_ruin_estimate": 0.015,
+                    "risk_of_ruin_label": "Low",
+                    "trade_count": 35,
+                    "market_count": 380,
+                    "trade_percent": 35 / 380,
+                    "ev_per_10_markets": 0.155263,
+                    "expected_return_per_market": {
+                        "p10": -0.01,
+                        "p25": 0.01,
+                        "expected": 0.015526,
+                        "p75": 0.03,
+                        "p90": 0.05,
+                    },
+                }
+            ]
         },
     )
 
@@ -146,11 +170,13 @@ def test_registry_parses_model_card_and_computed_picker_preview(tmp_path: Path) 
     assert metadata.model_card["model_version"] == 7
     assert metadata.model_card_preview is not None
     assert metadata.model_card_preview.split_name == "latest30"
-    assert metadata.model_card_preview.trade_count == 35
     assert metadata.model_card_preview.market_count == 380
-    assert metadata.model_card_preview.trade_percent == 35 / 380
     assert metadata.model_card_preview.brier == 0.162254
-    assert metadata.model_card_preview.ev_per_10_trades == (0.293532 * 20.1 / 35) * 10
+    assert metadata.model_card_preview.market_brier == 0.163622
+    assert metadata.model_card_preview.ece == 0.05507
+    assert metadata.model_card_preview.log_loss == 0.487541
+    assert metadata.risk_preset_trials[0]["risk_preset_id"] == "balanced"
+    assert metadata.risk_preset_trials[0]["ev_per_10_markets"] == 0.155263
 
 
 def test_registry_model_card_preview_preserves_zero_trade_percent(tmp_path: Path) -> None:
@@ -160,8 +186,6 @@ def test_registry_model_card_preview_preserves_zero_trade_percent(tmp_path: Path
         {
             "model_name": "zero-trade-card",
             "model_type": "market_anchored_linear_residual",
-            "default_execution_policy": "no_only",
-            "default_margin": 0.02,
             "training_data": {},
             "feature_set": {},
             "evaluation_splits": [
@@ -170,10 +194,7 @@ def test_registry_model_card_preview_preserves_zero_trade_percent(tmp_path: Path
                     "role": "test",
                     "event_count": 30,
                     "market_count": 100,
-                    "policy": "no_only",
-                    "margin": 0.02,
                     "metrics": {
-                        "trade_count": {"value": 0},
                         "brier": {"value": 0.21},
                     },
                 }
@@ -188,8 +209,8 @@ def test_registry_model_card_preview_preserves_zero_trade_percent(tmp_path: Path
     )
 
     assert preview is not None
-    assert preview.trade_count == 0
-    assert preview.trade_percent == 0
+    assert preview.market_count == 100
+    assert preview.brier == 0.21
 
 
 def test_registry_sorts_newest_models_first_using_model_card_version(tmp_path: Path) -> None:
@@ -201,8 +222,6 @@ def test_registry_sorts_newest_models_first_using_model_card_version(tmp_path: P
             "model_name": "aaa-older-card",
             "model_type": "test",
             "model_version": 1,
-            "default_execution_policy": "no_only",
-            "default_margin": 0.02,
             "training_data": {},
             "feature_set": {},
             "evaluation_splits": [],
@@ -214,8 +233,6 @@ def test_registry_sorts_newest_models_first_using_model_card_version(tmp_path: P
             "model_name": "zzz-newer-card",
             "model_type": "test",
             "model_version": 9,
-            "default_execution_policy": "no_only",
-            "default_margin": 0.02,
             "training_data": {},
             "feature_set": {},
             "evaluation_splits": [],

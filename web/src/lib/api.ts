@@ -2,6 +2,7 @@ import type {
   ExecutionMode,
   PollPredictionRow,
   PollSnapshot,
+  RiskPreset,
   SampleRow,
   SavedModelMetadata,
   ScoreResponse,
@@ -21,6 +22,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 export async function listModels(): Promise<SavedModelMetadata[]> {
   const payload = await request<{ models: SavedModelMetadata[] }>('/api/models')
   return payload.models
+}
+
+export async function listRiskPresets(): Promise<RiskPreset[]> {
+  const payload = await request<{ risk_presets: RiskPreset[] }>('/api/risk-presets')
+  return payload.risk_presets
 }
 
 export async function getModel(modelName: string): Promise<SavedModelMetadata> {
@@ -72,6 +78,19 @@ export async function getLatestPoll(): Promise<PollSnapshot | null> {
 export async function getLatestTrades(): Promise<PollPredictionRow[]> {
   const payload = await request<{ trades: PollPredictionRow[] }>('/api/trades/latest')
   return payload.trades
+}
+
+export async function getCurrentMarkets(modelName: string, riskPreset: RiskPreset): Promise<PollSnapshot> {
+  const params = new URLSearchParams({ risk_preset_id: riskPreset.id })
+  const payload = await request<{ snapshot: PollSnapshot }>(
+    `/api/models/${encodeURIComponent(modelName)}/current-markets?${params.toString()}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ risk_preset: riskPreset }),
+    },
+  )
+  return payload.snapshot
 }
 
 export async function getPollHistory(limit = 50): Promise<PollSnapshot[]> {

@@ -1,7 +1,7 @@
 import { BarChart3, Database, Layers3, Sigma } from 'lucide-react'
 import type { ReactNode } from 'react'
 
-import { formatCurrency, formatInteger, formatProbability } from '@/lib/format'
+import { formatCurrency, formatInteger } from '@/lib/format'
 import type { EvaluationSnapshot, SavedModelMetadata } from '@/lib/types'
 
 export interface ModelMetricsProps {
@@ -11,6 +11,7 @@ export interface ModelMetricsProps {
 export function ModelMetrics({ model }: ModelMetricsProps) {
   const training = model?.training
   const snapshots = model?.evaluation_snapshots ?? []
+  const visibleSnapshots = snapshots.filter((snapshot) => !snapshot.label.toLowerCase().includes('full'))
 
   return (
     <section className="grid gap-4 xl:grid-cols-[1fr_1.6fr]">
@@ -46,16 +47,16 @@ export function ModelMetrics({ model }: ModelMetricsProps) {
             <h2 className="font-display text-lg font-semibold">Backtest and holdout performance</h2>
           </div>
           <span className="rounded-full border border-cyan/30 bg-cyan/10 px-3 py-1 font-mono text-xs text-cyan">
-            {snapshots.length || 0} reports
+            {visibleSnapshots.length || 0} reports
           </span>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
-          {snapshots.length === 0 ? (
+          {visibleSnapshots.length === 0 ? (
             <div className="rounded-xl border border-amber/30 bg-amber/10 p-4 text-sm text-amber">
               No evaluation artifact was exposed for this model.
             </div>
           ) : (
-            snapshots.slice(0, 4).map((snapshot) => (
+            visibleSnapshots.slice(0, 4).map((snapshot) => (
               <EvaluationCard key={snapshot.label} snapshot={snapshot} />
             ))
           )}
@@ -88,20 +89,17 @@ interface EvaluationCardProps {
 }
 
 function EvaluationCard({ snapshot }: EvaluationCardProps) {
-  const positive = (snapshot.pnl ?? 0) >= 0 && (snapshot.roi ?? 0) >= 0
+  const positive = (snapshot.pnl ?? 0) >= 0
   return (
     <div className="rounded-xl border border-line/70 bg-background/55 p-3">
-      <p className="font-mono text-sm font-semibold text-foreground">{snapshot.label}</p>
-      <div className="mt-3 grid grid-cols-3 gap-2 text-xs">
+      <p className="font-mono text-sm font-semibold text-foreground">
+        {displaySnapshotLabel(snapshot.label)}
+      </p>
+      <div className="mt-3 grid grid-cols-2 gap-2 text-xs">
         <SmallMetric label="Trades" value={formatInteger(snapshot.trades)} />
         <SmallMetric
           label="PnL"
           value={formatCurrency(snapshot.pnl)}
-          tone={positive ? 'text-green' : 'text-red'}
-        />
-        <SmallMetric
-          label="ROI"
-          value={formatProbability(snapshot.roi)}
           tone={positive ? 'text-green' : 'text-red'}
         />
       </div>
@@ -113,6 +111,14 @@ function EvaluationCard({ snapshot }: EvaluationCardProps) {
       ) : null}
     </div>
   )
+}
+
+function displaySnapshotLabel(label: string): string {
+  const normalized = label.toLowerCase()
+  if (normalized.includes('latest-30') || normalized.includes('latest30')) {
+    return 'Testing suite results'
+  }
+  return label
 }
 
 interface SmallMetricProps {

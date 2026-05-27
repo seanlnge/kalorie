@@ -19,7 +19,7 @@ case "$(uname -s 2>/dev/null || echo unknown)" in
 esac
 API_PORT="${API_PORT:-8000}"
 WEB_PORT="${WEB_PORT:-5173}"
-POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-600}"
+POLL_INTERVAL_SECONDS="${POLL_INTERVAL_SECONDS:-60}"
 MODEL_NAME="${MODEL_NAME:-}"
 NO_POLLER=0
 
@@ -38,7 +38,7 @@ Starts the local Kalorie2 stack and stops every child process on Ctrl+C.
 Options:
   --api-port PORT          FastAPI port (default: 8000)
   --web-port PORT          Vite port (default: 5173)
-  --poll-interval SECONDS  Market poll interval (default: 600)
+  --poll-interval SECONDS  Market poll interval (default: 60)
   --model-name NAME        Model name for the poller (default: newest model)
   --no-poller              Start only API and web
   PYTHON=/path/python      Optional Python executable override
