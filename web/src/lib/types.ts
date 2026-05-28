@@ -202,3 +202,28 @@ export interface AccountSummary {
   bankroll: number
   error?: string | null
 }
+
+export interface OpenPosition {
+  market_ticker: string
+  side: 'YES' | 'NO' | string
+  contracts: number
+  average_price?: number | null
+  market_value?: number | null
+  exposure?: number | null
+  realized_pnl?: number | null
+  fees_paid?: number | null
+}
+
+export interface OpenPositionsSummary {
+  available: boolean
+  source: 'kalshi' | 'paper' | string
+  open_position_count: number
+  total_contracts: number
+  average_price?: number | null
+  total_market_value?: number | null
+  total_exposure?: number | null
+  realized_pnl?: number | null
+  fees_paid?: number | null
+  positions: OpenPosition[]
+  error?: string | null
+}

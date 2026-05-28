@@ -72,9 +72,85 @@ def _write_api_bundle(root: Path, *, side: str = "NO") -> Path:
     return model_dir
 
 
+def _write_risk_trial_bundle(root: Path) -> Path:
+    model_dir = _write_api_bundle(root, side="NONE")
+    with (model_dir / "training" / "rows.csv").open("w", encoding="utf-8", newline="") as handle:
+        fieldnames = [
+            "market_ticker",
+            "event_ticker",
+            "close_time",
+            "final_outcome",
+            "preclose_yes_bid",
+            "preclose_yes_ask",
+            "preclose_yes_mid",
+            "probability",
+        ]
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(
+            [
+                {
+                    "market_ticker": "MKT-YES-WIN",
+                    "event_ticker": "EVENT-1",
+                    "close_time": "2026-05-20T12:00:00Z",
+                    "final_outcome": "yes",
+                    "preclose_yes_bid": "0.40",
+                    "preclose_yes_ask": "0.45",
+                    "preclose_yes_mid": "0.425",
+                    "probability": "0.70",
+                },
+                {
+                    "market_ticker": "MKT-NO-WIN",
+                    "event_ticker": "EVENT-2",
+                    "close_time": "2026-05-21T12:00:00Z",
+                    "final_outcome": "no",
+                    "preclose_yes_bid": "0.55",
+                    "preclose_yes_ask": "0.60",
+                    "preclose_yes_mid": "0.575",
+                    "probability": "0.25",
+                },
+                {
+                    "market_ticker": "MKT-NONE",
+                    "event_ticker": "EVENT-3",
+                    "close_time": "2026-05-22T12:00:00Z",
+                    "final_outcome": "yes",
+                    "preclose_yes_bid": "0.48",
+                    "preclose_yes_ask": "0.52",
+                    "preclose_yes_mid": "0.50",
+                    "probability": "0.51",
+                },
+            ]
+        )
+    (model_dir / "runtime" / "model_runtime.py").write_text(
+        "\n".join(
+            [
+                "def load_model(model_dir):",
+                "    return {}",
+                "",
+                "def load_web_evidence(model_dir):",
+                "    return {}",
+                "",
+                "def score_row(row, model, web_evidence_by_event):",
+                "    probability = float(row['probability'])",
+                "    market_probability = float(row['preclose_yes_mid'])",
+                "    return {",
+                "        'market_ticker': row['market_ticker'],",
+                "        'event_ticker': row['event_ticker'],",
+                "        'probability': probability,",
+                "        'market_probability': market_probability,",
+                "        'residual_delta': probability - market_probability,",
+                "        'trade_decision': {'side': 'NONE', 'cost': 0, 'edge': 0},",
+                "    }",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return model_dir
+
+
 def test_model_list_and_detail_endpoints_return_saved_model_metadata(tmp_path: Path) -> None:
     _write_api_bundle(tmp_path)
-    client = TestClient(create_app(models_root=tmp_path))
+    client = TestClient(create_app(models_root=tmp_path, env_path=tmp_path / ".env.missing"))
 
     list_response = client.get("/api/models")
     detail_response = client.get("/api/models/unit-model")
@@ -91,7 +167,7 @@ def test_model_list_and_detail_endpoints_return_saved_model_metadata(tmp_path: P
 
 
 def test_risk_presets_endpoint_returns_available_policy_overlays(tmp_path: Path) -> None:
-    client = TestClient(create_app(models_root=tmp_path))
+    client = TestClient(create_app(models_root=tmp_path, env_path=tmp_path / ".env.missing"))
 
     response = client.get("/api/risk-presets")
 
@@ -105,6 +181,37 @@ def test_risk_presets_endpoint_returns_available_policy_overlays(tmp_path: Path)
     assert presets[1]["min_margin"] > 0
 
 
+def test_custom_risk_trial_endpoint_computes_metrics_from_saved_rows(tmp_path: Path) -> None:
+    _write_risk_trial_bundle(tmp_path)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    response = client.post(
+        "/api/models/unit-model/risk-trial",
+        json={
+            "risk_preset": {
+                "id": "custom-open",
+                "label": "Custom Open",
+                "description": "custom",
+                "trade_side": "all",
+                "min_margin": 0.05,
+                "kelly_fraction": 0.5,
+                "max_position_fraction": 0.05,
+                "max_event_exposure_fraction": 0.1,
+            }
+        },
+    )
+
+    assert response.status_code == 200
+    trial = response.json()["trial"]
+    assert trial["risk_preset_id"] == "custom-open"
+    assert trial["trade_count"] == 2
+    assert trial["market_count"] == 3
+    assert trial["trade_percent"] == 2 / 3
+    assert trial["ev_per_10_markets"] > 0
+    assert trial["risk_of_ruin_estimate"] >= 0
+    assert trial["expected_return_per_market"]["expected"] > 0
+
+
 def test_account_summary_endpoint_uses_paper_bankroll_without_auth(
     tmp_path: Path,
     monkeypatch,
@@ -112,7 +219,7 @@ def test_account_summary_endpoint_uses_paper_bankroll_without_auth(
     monkeypatch.delenv("KALSHI_API_KEY_ID", raising=False)
     monkeypatch.delenv("KALSHI_API_KEY", raising=False)
     monkeypatch.delenv("KALSHI_PRIVATE_KEY_PATH", raising=False)
-    client = TestClient(create_app(models_root=tmp_path))
+    client = TestClient(create_app(models_root=tmp_path, env_path=tmp_path / ".env.missing"))
 
     response = client.get("/api/account/summary")
 
@@ -151,6 +258,66 @@ def test_account_summary_endpoint_uses_authenticated_balance(
     assert summary["free_cash"] == 180.0
     assert summary["position_exposure"] == 12.0
     assert summary["bankroll"] == 180.0
+
+
+def test_account_positions_endpoint_returns_normalized_open_positions(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeAccountClient:
+        @classmethod
+        def from_env(cls, *, http_client: object) -> "FakeAccountClient":
+            return cls()
+
+        def list_positions(self) -> dict[str, object]:
+            return {
+                "market_positions": [
+                    {
+                        "ticker": "MKT-YES",
+                        "position": 5,
+                        "market_exposure": 250,
+                        "market_value": 310,
+                        "average_price": 50,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiAccountClient", FakeAccountClient)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    response = client.get("/api/account/positions")
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["available"] is True
+    assert summary["open_position_count"] == 1
+    assert summary["total_contracts"] == 5
+    assert summary["total_exposure"] == 2.5
+    assert summary["positions"][0]["market_ticker"] == "MKT-YES"
+
+
+def test_account_positions_endpoint_surfaces_position_fetch_errors(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class FakeAccountClient:
+        @classmethod
+        def from_env(cls, *, http_client: object) -> "FakeAccountClient":
+            return cls()
+
+        def list_positions(self) -> dict[str, object]:
+            raise RuntimeError("positions unavailable")
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiAccountClient", FakeAccountClient)
+    client = TestClient(create_app(models_root=tmp_path))
+
+    response = client.get("/api/account/positions")
+
+    assert response.status_code == 200
+    summary = response.json()["summary"]
+    assert summary["available"] is False
+    assert summary["source"] == "kalshi"
+    assert "positions unavailable" in summary["error"]
 
 
 def test_account_summary_keeps_balance_when_positions_fail(

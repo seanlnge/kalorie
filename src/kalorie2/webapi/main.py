@@ -14,7 +14,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from kalorie2.kalshi_account import KalshiAccountClient, build_account_summary, load_env_file
+from kalorie2.kalshi_account import (
+    KalshiAccountClient,
+    build_account_summary,
+    build_open_positions_summary,
+    load_env_file,
+)
 from kalorie2.market_poller import (
     ActiveMarketRow,
     CachedSavedModelMarketScorer,
@@ -30,9 +35,11 @@ from kalorie2.risk_presets import (
     get_risk_preset,
     list_risk_presets,
 )
+from kalorie2.risk_trials import build_risk_preset_trials
 from kalorie2.saved_models import (
     SavedModelRegistry,
     SavedModelScorer,
+    build_saved_model_evaluation_rows,
     read_sample_rows,
 )
 
@@ -45,6 +52,12 @@ class CurrentMarketsRiskRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     risk_preset: RiskPreset | None = None
+
+
+class RiskTrialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    risk_preset: RiskPreset
 
 
 @dataclass
@@ -79,6 +92,7 @@ def create_app(
         models_root=app.state.models_root
     )
     app.state.current_market_prediction_cache: dict[str, CurrentMarketPredictionCacheEntry] = {}
+    app.state.risk_trial_cache: dict[str, dict] = {}
 
     @app.get("/api/models")
     def list_models() -> JSONResponse:
@@ -138,6 +152,28 @@ def create_app(
             )
         return JSONResponse({"summary": summary.model_dump(mode="json")})
 
+    @app.get("/api/account/positions")
+    def account_positions() -> JSONResponse:
+        try:
+            with httpx.Client(timeout=15) as http_client:
+                account_client = KalshiAccountClient.from_env(http_client=http_client)
+                if account_client is None:
+                    summary = build_open_positions_summary(
+                        None,
+                        error="Kalshi account auth is not configured",
+                    )
+                else:
+                    summary = build_open_positions_summary(account_client.list_positions())
+        except Exception as exc:  # noqa: BLE001
+            summary = build_open_positions_summary(None).model_copy(
+                update={
+                    "available": False,
+                    "source": "kalshi",
+                    "error": f"Failed to load Kalshi positions: {exc}",
+                }
+            )
+        return JSONResponse({"summary": summary.model_dump(mode="json")})
+
     @app.get("/api/models/{model_name}/sample-rows")
     def sample_rows(model_name: str, limit: int = 10) -> JSONResponse:
         registry: SavedModelRegistry = app.state.registry
@@ -181,6 +217,28 @@ def create_app(
                 "rows": [row.model_dump(mode="json") for row in rows],
             }
         )
+
+    @app.post("/api/models/{model_name}/risk-trial")
+    def risk_trial(model_name: str, request: RiskTrialRequest) -> JSONResponse:
+        registry: SavedModelRegistry = app.state.registry
+        try:
+            model_dir = registry.model_dir(model_name)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        cache_key = _risk_trial_cache_key(model_name, request.risk_preset)
+        risk_trial_cache: dict[str, dict] = app.state.risk_trial_cache
+        if cache_key in risk_trial_cache:
+            return JSONResponse({"trial": risk_trial_cache[cache_key]})
+        rows = build_saved_model_evaluation_rows(model_dir)
+        if not rows:
+            raise HTTPException(
+                status_code=422,
+                detail="Saved model does not have usable evaluation rows for risk trials",
+            )
+        trial = build_risk_preset_trials(rows, presets=[request.risk_preset])[0]
+        payload = trial.model_dump(mode="json")
+        risk_trial_cache[cache_key] = payload
+        return JSONResponse({"trial": payload})
 
     @app.get("/api/polls/latest")
     def latest_poll() -> JSONResponse:
@@ -377,6 +435,16 @@ def _apply_risk_preset_to_poll_row(row, *, risk_preset: RiskPreset):
             "recommended_fraction": decision.recommended_fraction,
             "passes_risk_filter": decision.passes_filter,
         }
+    )
+
+
+def _risk_trial_cache_key(model_name: str, risk_preset: RiskPreset) -> str:
+    return json.dumps(
+        {
+            "model_name": model_name,
+            "risk_preset": risk_preset.model_dump(mode="json"),
+        },
+        sort_keys=True,
     )
 
 

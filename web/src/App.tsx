@@ -8,6 +8,8 @@ import { RiskPresetDropdown } from '@/components/RiskPresetDropdown'
 import { TradingHistoryPage } from '@/components/TradingHistoryPage'
 import { useAccountSummary } from '@/hooks/useAccountSummary'
 import { useLiveCurrentMarkets } from '@/hooks/useLiveCurrentMarkets'
+import { useOpenPositions } from '@/hooks/useOpenPositions'
+import { useRiskPresetTrial } from '@/hooks/useRiskPresetTrial'
 import { useWorkstation } from '@/hooks/useWorkstation'
 import { listRiskPresets } from '@/lib/api'
 import { formatDollars } from '@/lib/format'
@@ -18,12 +20,14 @@ type ViewId = 'markets' | 'history' | 'model'
 function App() {
   const workstation = useWorkstation()
   const account = useAccountSummary()
+  const openPositions = useOpenPositions()
   const [riskPresets, setRiskPresets] = useState<RiskPreset[]>([])
   const [selectedRiskPresetId, setSelectedRiskPresetId] = useState<string | null>(null)
   const [riskPresetError, setRiskPresetError] = useState<string | null>(null)
   const selectedRiskPreset =
     riskPresets.find((preset) => preset.id === selectedRiskPresetId) ?? riskPresets[0] ?? null
   const currentMarkets = useLiveCurrentMarkets(workstation.selectedModelName, selectedRiskPreset)
+  const riskTrial = useRiskPresetTrial(workstation.selectedModel, selectedRiskPreset)
   const [activeView, setActiveView] = useState<ViewId>('markets')
 
   useEffect(() => {
@@ -121,6 +125,10 @@ function App() {
           {account.error && account.summary.source !== 'paper' ? (
             <SystemNotice tone="amber" message={account.error} />
           ) : null}
+          {openPositions.error && openPositions.error !== 'Kalshi account auth is not configured' ? (
+            <SystemNotice tone="amber" message={openPositions.error} />
+          ) : null}
+          {riskTrial.error ? <SystemNotice tone="amber" message={riskTrial.error} /> : null}
 
           {activeView === 'markets' ? (
             <CurrentMarketsPage
@@ -132,7 +140,10 @@ function App() {
           ) : null}
 
           {activeView === 'history' ? (
-            <TradingHistoryPage />
+            <TradingHistoryPage
+              positions={openPositions.summary}
+              currentMarketRows={currentMarkets.snapshot?.prediction_rows ?? []}
+            />
           ) : null}
 
           {activeView === 'model' ? (
@@ -146,6 +157,8 @@ function App() {
               scoring={workstation.scoring}
               currentMarketRows={currentMarkets.snapshot?.prediction_rows ?? []}
               currentMarketsLoading={currentMarkets.loading}
+              riskTrial={riskTrial.trial}
+              riskTrialLoading={riskTrial.loading}
               onRowIndexChange={workstation.setSelectedRowIndex}
               onExecutionModeChange={workstation.setExecutionMode}
               onScoreSample={workstation.scoreSelectedRow}
@@ -191,6 +204,7 @@ function PortfolioReadout({ summary }: { readonly summary: AccountSummary }) {
         Portfolio
       </span>
       <span className="font-mono text-lg font-semibold text-foreground">{portfolioLabel}</span>
+      <span className="font-mono text-xs text-muted">{freeCashLabel}</span>
     </div>
   )
 }

@@ -3,6 +3,7 @@ import type { RiskPresetTrial } from '@/lib/types'
 
 export interface RiskReturnBandChartProps {
   readonly trial: RiskPresetTrial | null
+  readonly loading?: boolean
 }
 
 const WIDTH = 760
@@ -10,19 +11,20 @@ const HEIGHT = 260
 const PAD_X = 64
 const PAD_Y = 30
 
-export function RiskReturnBandChart({ trial }: RiskReturnBandChartProps) {
+export function RiskReturnBandChart({ trial, loading = false }: RiskReturnBandChartProps) {
   if (!trial) {
     return (
       <section className="rounded-lg border border-dashed border-line bg-panel/60 p-5 shadow-terminal">
         <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
           Selected model + risk preset
         </p>
-        <h2 className="mt-2 font-display text-lg font-semibold">No trial distribution yet</h2>
+        <h2 className="mt-2 font-display text-lg font-semibold">
+          {loading ? 'Computing trial distribution...' : 'No trial distribution yet'}
+        </h2>
         <p className="mt-3 max-w-2xl text-sm leading-6 text-muted">
-          This preset can score live markets, but the model card does not include a bootstrap
-          risk-return distribution for it yet. Built-in presets show percentile bands here; custom
-          session presets need a generated trial artifact before this chart can compare downside and
-          upside.
+          {loading
+            ? 'The app is running this risk preset across saved evaluation rows and building a bootstrap risk-return distribution.'
+            : 'This preset can score live markets, but the model card does not include a bootstrap risk-return distribution for it yet.'}
         </p>
       </section>
     )

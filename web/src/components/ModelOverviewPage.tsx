@@ -11,6 +11,7 @@ import type {
   ExecutionMode,
   PollPredictionRow,
   RiskPreset,
+  RiskPresetTrial,
   SampleRow,
   SavedModelMetadata,
   ScoreRow,
@@ -26,6 +27,8 @@ export interface ModelOverviewPageProps {
   readonly scoring: boolean
   readonly currentMarketRows: readonly PollPredictionRow[]
   readonly currentMarketsLoading: boolean
+  readonly riskTrial: RiskPresetTrial | null
+  readonly riskTrialLoading: boolean
   readonly onRowIndexChange: (rowIndex: number) => void
   readonly onExecutionModeChange: (mode: ExecutionMode) => void
   readonly onScoreSample: () => Promise<void>
@@ -42,6 +45,8 @@ export function ModelOverviewPage({
   scoring,
   currentMarketRows,
   currentMarketsLoading,
+  riskTrial,
+  riskTrialLoading,
   onRowIndexChange,
   onExecutionModeChange,
   onScoreSample,
@@ -52,12 +57,17 @@ export function ModelOverviewPage({
   return (
     <section className="space-y-4">
       {card ? (
-        <ModelCardPanel model={model} riskPreset={riskPreset} />
+        <ModelCardPanel
+          model={model}
+          riskPreset={riskPreset}
+          selectedTrial={riskTrial}
+          riskTrialLoading={riskTrialLoading}
+        />
       ) : (
         <LegacyMetadataNotice model={model} />
       )}
 
-      <RiskReturnBandChart trial={selectedRiskPresetTrial(model, riskPreset)} />
+      <RiskReturnBandChart trial={riskTrial} loading={riskTrialLoading} />
 
       <ModelMetrics model={model} />
 
@@ -94,30 +104,30 @@ export function ModelOverviewPage({
 function ModelCardPanel({
   model,
   riskPreset,
+  selectedTrial,
+  riskTrialLoading,
 }: {
   readonly model: SavedModelMetadata | null
   readonly riskPreset: RiskPreset | null
+  readonly selectedTrial: RiskPresetTrial | null
+  readonly riskTrialLoading: boolean
 }) {
   const card = model?.model_card
   if (!card) return null
   const splits = card.evaluation_splits.filter((split) => !isFullScoredWindow(split))
-  const selectedTrial = selectedRiskPresetTrial(model, riskPreset)
 
   return (
     <section className="grid gap-4 xl:grid-cols-[minmax(0,1.3fr)_minmax(22rem,0.7fr)]">
       <div className="grid gap-3 md:grid-cols-4 xl:col-span-2">
-        <CardStat
-          label="EV/10 markets"
-          value={formatSigned(selectedTrial?.ev_per_10_markets)}
-        />
-        <CardStat label="Trade %" value={formatProbability(selectedTrial?.trade_percent)} />
+        <CardStat label="EV/10 markets" value={trialValue(formatSigned(selectedTrial?.ev_per_10_markets), riskTrialLoading)} />
+        <CardStat label="Trade %" value={trialValue(formatProbability(selectedTrial?.trade_percent), riskTrialLoading)} />
         <CardStat
           label="Risk of ruin"
-          value={formatProbability(selectedTrial?.risk_of_ruin_estimate)}
+          value={trialValue(formatProbability(selectedTrial?.risk_of_ruin_estimate), riskTrialLoading)}
         />
         <CardStat
           label="Expected / market"
-          value={formatSigned(selectedTrial?.expected_return_per_market.expected)}
+          value={trialValue(formatSigned(selectedTrial?.expected_return_per_market.expected), riskTrialLoading)}
         />
       </div>
       <div className="rounded-lg border border-line bg-panel/82 p-4 shadow-terminal">
@@ -176,7 +186,11 @@ function ModelCardPanel({
         </div>
       </div>
 
-      <RiskPresetPanel riskPreset={riskPreset} selectedTrial={selectedTrial} />
+      <RiskPresetPanel
+        riskPreset={riskPreset}
+        selectedTrial={selectedTrial}
+        riskTrialLoading={riskTrialLoading}
+      />
     </section>
   )
 }
@@ -184,9 +198,11 @@ function ModelCardPanel({
 function RiskPresetPanel({
   riskPreset,
   selectedTrial,
+  riskTrialLoading,
 }: {
   readonly riskPreset: RiskPreset | null
-  readonly selectedTrial: SavedModelMetadata['risk_preset_trials'][number] | null
+  readonly selectedTrial: RiskPresetTrial | null
+  readonly riskTrialLoading: boolean
 }) {
   return (
     <aside className="rounded-lg border border-line bg-panel/82 p-4 shadow-terminal">
@@ -211,13 +227,13 @@ function RiskPresetPanel({
         />
         <CardStat
           label="Risk of ruin"
-          value={formatProbability(selectedTrial?.risk_of_ruin_estimate)}
+          value={trialValue(formatProbability(selectedTrial?.risk_of_ruin_estimate), riskTrialLoading)}
         />
         <CardStat
           label="EV/10 markets"
-          value={formatSigned(selectedTrial?.ev_per_10_markets)}
+          value={trialValue(formatSigned(selectedTrial?.ev_per_10_markets), riskTrialLoading)}
         />
-        <CardStat label="Trade %" value={formatProbability(selectedTrial?.trade_percent)} />
+        <CardStat label="Trade %" value={trialValue(formatProbability(selectedTrial?.trade_percent), riskTrialLoading)} />
         <CardStat label="Side policy" value={riskPreset?.trade_side.replace('_', '-') ?? '--'} />
       </div>
       <div className="mt-4 rounded-md border border-line bg-background/55 p-3">
@@ -228,7 +244,11 @@ function RiskPresetPanel({
           {riskPreset?.description ??
             'Risk presets convert model probabilities into trade filters and sizing guidance.'}
         </p>
-        {selectedTrial ? (
+        {riskTrialLoading ? (
+          <p className="mt-2 text-xs leading-5 text-muted">
+            Computing this model+preset trial from saved evaluation rows...
+          </p>
+        ) : selectedTrial ? (
           <p className="mt-2 text-xs leading-5 text-muted">
             Risk of ruin is estimated from the selected model/preset trial bootstrap as the
             share of sampled event returns below zero:{' '}
@@ -241,17 +261,8 @@ function RiskPresetPanel({
   )
 }
 
-function selectedRiskPresetTrial(
-  model: SavedModelMetadata | null,
-  riskPreset: RiskPreset | null,
-): SavedModelMetadata['risk_preset_trials'][number] | null {
-  if (!model?.risk_preset_trials.length) {
-    return null
-  }
-  if (!riskPreset) {
-    return model.risk_preset_trials[0] ?? null
-  }
-  return model.risk_preset_trials.find((trial) => trial.risk_preset_id === riskPreset.id) ?? null
+function trialValue(value: string, loading: boolean): string {
+  return loading ? 'Computing...' : value
 }
 
 function LegacyMetadataNotice({ model }: { readonly model: SavedModelMetadata | null }) {

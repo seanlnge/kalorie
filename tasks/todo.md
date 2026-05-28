@@ -1183,3 +1183,43 @@ Verification:
 - `python -m pytest tests/test_market_poller.py -q`: 13 passed.
 - `python -m ruff check src/kalorie2/market_poller.py tests/test_market_poller.py`: All checks passed.
 - IDE diagnostics: no linter errors found for edited poller files.
+
+### Follow-Up: Custom Risk Trials + Open Positions
+
+Goal:
+
+- Custom/session risk presets should show real Model Overview metrics instead of `--`.
+- Trading History should start with a live open-positions block before the not-live executed trade ledger.
+
+Design:
+
+- Add a backend risk-trial endpoint for `POST /api/models/{model_name}/risk-trial`.
+- For built-in presets, the UI can still use `risk_preset_trials` already packaged with the model card.
+- For custom presets, the endpoint loads the saved model training/evaluation CSV, re-scores rows with the saved runtime, filters to the latest held-out event window, runs `build_risk_preset_trials(..., presets=[customPreset])`, caches the result by model and preset parameters, and returns a real `RiskPresetTrial`.
+- This computes `EV/10 markets`, `Trade %`, `Risk of ruin`, `Expected / market`, and the percentile chart from the same risk-trial code used during model-card generation.
+- Add a backend account-positions summary endpoint that normalizes Kalshi `market_positions` into rows and aggregate metrics: open position count, total contracts, total exposure, total market value, weighted average price, and realized PnL when present.
+- Render that positions summary above the executed-trade ledger. Where a position ticker matches current active-market model output, show model EV/contract and aggregate model EV for the open contracts.
+
+Implementation checklist:
+
+- [ ] Add failing backend tests for custom risk-trial computation from scored historical rows.
+- [ ] Implement risk-trial loading/caching endpoint.
+- [ ] Add failing backend tests for open position summary normalization and endpoint.
+- [ ] Implement open positions summary endpoint.
+- [ ] Add frontend types/API hooks for risk trial and open positions.
+- [ ] Wire Model Overview to fetch computed trials for custom presets.
+- [ ] Render open positions above Trading History with account and model-overlay metrics.
+- [ ] Verify with focused backend tests, ruff, frontend build, lints, Browser smoke, and review.
+
+Verification:
+
+- `python -m pytest tests/test_kalshi_account.py tests/test_webapi_models.py`: 25 passed.
+- `python -m pytest tests/test_kalshi_account.py tests/test_webapi_models.py tests/test_saved_models.py tests/test_model_cards.py tests/test_risk_presets.py`: 41 passed.
+- `python -m ruff check src/kalorie2/kalshi_account.py src/kalorie2/saved_models.py src/kalorie2/webapi/main.py tests/test_kalshi_account.py tests/test_webapi_models.py`: All checks passed.
+- `npm run build` in `kalorie2/web`: TypeScript build and Vite production build passed.
+- IDE diagnostics: no linter errors found for edited frontend files.
+- Browser smoke: created a custom `Balanced Copy` preset, observed the Model Overview compute state, then confirmed EV/10 markets, Trade %, Risk of ruin, Expected / market, and the risk-return chart rendered for that custom preset. Trading History shows the new open positions panel above the executed-trade ledger.
+
+Review notes:
+
+- Fixed reviewer findings around Kalshi doc-shaped position payloads (`position_fp`, `total_traded_dollars`), visible position-fetch errors, average buy aggregation when prices are missing, and held-position model EV calculation.

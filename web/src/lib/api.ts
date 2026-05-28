@@ -1,9 +1,11 @@
 import type {
   AccountSummary,
   ExecutionMode,
+  OpenPositionsSummary,
   PollPredictionRow,
   PollSnapshot,
   RiskPreset,
+  RiskPresetTrial,
   SampleRow,
   SavedModelMetadata,
   ScoreResponse,
@@ -32,6 +34,11 @@ export async function listRiskPresets(): Promise<RiskPreset[]> {
 
 export async function getAccountSummary(): Promise<AccountSummary> {
   const payload = await request<{ summary: AccountSummary }>('/api/account/summary')
+  return payload.summary
+}
+
+export async function getOpenPositionsSummary(): Promise<OpenPositionsSummary> {
+  const payload = await request<{ summary: OpenPositionsSummary }>('/api/account/positions')
   return payload.summary
 }
 
@@ -70,6 +77,21 @@ export async function scoreModel({
     method: 'POST',
     body: formData,
   })
+}
+
+export async function computeRiskTrial(
+  modelName: string,
+  riskPreset: RiskPreset,
+): Promise<RiskPresetTrial> {
+  const payload = await request<{ trial: RiskPresetTrial }>(
+    `/api/models/${encodeURIComponent(modelName)}/risk-trial`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ risk_preset: riskPreset }),
+    },
+  )
+  return payload.trial
 }
 
 export async function getLatestPoll(): Promise<PollSnapshot | null> {

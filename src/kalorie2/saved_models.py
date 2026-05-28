@@ -11,6 +11,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from kalorie2.model_cards import EvaluationRow, latest_event_rows, parse_iso_utc
+
 
 class SavedModelBase(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -247,6 +249,59 @@ def read_sample_rows(csv_path: Path, *, limit: int = 10) -> list[dict[str, str]]
                 break
             rows.append({"row_index": str(index), **row})
     return rows
+
+
+def build_saved_model_evaluation_rows(
+    model_dir: Path,
+    *,
+    latest_event_count: int = 30,
+) -> list[EvaluationRow]:
+    rows = _all_saved_model_evaluation_rows(model_dir)
+    return latest_event_rows(rows, event_count=latest_event_count)
+
+
+def _all_saved_model_evaluation_rows(model_dir: Path) -> list[EvaluationRow]:
+    csv_path = _training_csv_path(model_dir)
+    if not csv_path.exists():
+        return []
+    scorer = CachedRuntimeSavedModelScorer(model_dir)
+    rows: list[EvaluationRow] = []
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        for raw_row in csv.DictReader(handle):
+            outcome = str(raw_row.get("final_outcome") or "").strip().lower()
+            if outcome not in {"yes", "no"}:
+                continue
+            try:
+                score = scorer.score_row_dict(_clean_csv_row(raw_row))
+                rows.append(
+                    EvaluationRow(
+                        event_ticker=str(raw_row["event_ticker"]),
+                        close_time=parse_iso_utc(str(raw_row["close_time"])),
+                        outcome_label=1 if outcome == "yes" else 0,
+                        market_probability=float(raw_row["preclose_yes_mid"]),
+                        model_probability=score.model_probability,
+                        yes_bid=float(raw_row["preclose_yes_bid"]),
+                        yes_ask=float(raw_row["preclose_yes_ask"]),
+                    )
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+    return rows
+
+
+def _training_csv_path(model_dir: Path) -> Path:
+    manifest_path = model_dir / "artifacts" / "training-manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        training_corpus = _dict(manifest.get("training_corpus"))
+        saved_csv = training_corpus.get("saved_csv")
+        if saved_csv:
+            return model_dir / str(saved_csv)
+    return model_dir / "training" / "mention-markets-historical-20260523.csv"
+
+
+def _clean_csv_row(row: dict[str, str]) -> dict[str, str]:
+    return {key: value for key, value in row.items() if value not in {"", None}}
 
 
 def _artifact_paths(model_dir: Path) -> dict[str, str]:
