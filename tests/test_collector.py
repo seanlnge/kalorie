@@ -9,6 +9,7 @@ from kalorie2.collector import (
     classify_market_category,
     extract_target_phrase,
     is_mention_market,
+    sample_snapshot_hour_offsets,
     select_preclose_snapshot,
 )
 
@@ -110,6 +111,10 @@ def test_select_preclose_snapshot_chooses_latest_bid_ask_before_target():
                 "end_period_ts": target_ts - 60,
                 "yes_bid": {"close_dollars": "0.44"},
                 "yes_ask": {"close_dollars": "0.50"},
+                "volume": 1200,
+                "open_interest": 340,
+                "yes_bid_size": 50,
+                "yes_ask_size": 65,
             },
             {
                 "end_period_ts": target_ts + 60,
@@ -127,6 +132,10 @@ def test_select_preclose_snapshot_chooses_latest_bid_ask_before_target():
     assert snapshot.yes_mid == Decimal("0.47")
     assert snapshot.candle_end_ts == target_ts - 60
     assert snapshot.staleness_seconds == 60
+    assert snapshot.volume == 1200
+    assert snapshot.open_interest == 340
+    assert snapshot.yes_bid_size == 50
+    assert snapshot.yes_ask_size == 65
 
 
 def test_select_preclose_snapshot_rejects_candles_outside_staleness_limit():
@@ -163,6 +172,34 @@ def test_select_preclose_snapshot_accepts_historical_candle_close_fields():
     assert snapshot is not None
     assert snapshot.yes_bid == Decimal("0.91")
     assert snapshot.yes_ask == Decimal("0.96")
+
+
+def test_sample_snapshot_hour_offsets_is_seeded_unique_and_within_bounds():
+    offsets = sample_snapshot_hour_offsets(
+        "KXEARNINGSMENTIONAAPL-26JUL30-VISI",
+        count=5,
+        min_hours=2,
+        max_hours=48,
+        seed=17,
+    )
+
+    assert offsets == sample_snapshot_hour_offsets(
+        "KXEARNINGSMENTIONAAPL-26JUL30-VISI",
+        count=5,
+        min_hours=2,
+        max_hours=48,
+        seed=17,
+    )
+    assert offsets != sample_snapshot_hour_offsets(
+        "KXEARNINGSMENTIONMSFT-26JUL30-AI",
+        count=5,
+        min_hours=2,
+        max_hours=48,
+        seed=17,
+    )
+    assert len(offsets) == 5
+    assert len(set(offsets)) == 5
+    assert all(2 <= offset <= 48 for offset in offsets)
 
 
 def test_collector_builds_rows_from_search_series_and_historical_candles():
@@ -215,6 +252,8 @@ def test_collector_builds_rows_from_search_series_and_historical_candles():
                             ),
                             "yes_bid": {"close_dollars": "0.62"},
                             "yes_ask": {"close_dollars": "0.68"},
+                            "volume": 1000,
+                            "open_interest": 250,
                         }
                     ]
                 },
@@ -241,10 +280,82 @@ def test_collector_builds_rows_from_search_series_and_historical_candles():
     assert row.preclose_yes_mid == Decimal("0.65")
     assert row.final_outcome == "yes"
     assert row.snapshot_staleness_seconds == 60
+    assert row.preclose_volume == 1000
+    assert row.preclose_open_interest == 250
     assert "raw_market" not in row.model_dump(mode="json")
     assert "raw_candle" not in row.model_dump(mode="json")
     assert result.stats["rows_written"] == 1
     assert any("/historical/markets/" in request.url.path for request in requests)
+
+
+def test_collector_expands_market_to_seeded_random_snapshot_rows():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/search/series":
+            return httpx.Response(
+                200,
+                json={
+                    "current_page": [
+                        {
+                            "event_ticker": "KXEARNINGSMENTIONAAPL-26JUL30",
+                            "event_title": (
+                                "What will Apple say during their next earnings call?"
+                            ),
+                            "series_ticker": "KXEARNINGSMENTIONAAPL",
+                            "markets": [
+                                {
+                                    "ticker": "KXEARNINGSMENTIONAAPL-26JUL30-VISI",
+                                    "event_ticker": "KXEARNINGSMENTIONAAPL-26JUL30",
+                                    "title": (
+                                        "What will Apple say during their next earnings call?"
+                                    ),
+                                    "custom_strike": {"Word": "Vision Pro"},
+                                    "status": "finalized",
+                                    "result": "yes",
+                                    "close_time": "2026-07-30T20:00:00Z",
+                                }
+                            ],
+                        }
+                    ]
+                },
+            )
+        if "/candlesticks" in request.url.path:
+            end_ts = int(request.url.params["end_ts"])
+            return httpx.Response(
+                200,
+                json={
+                    "candlesticks": [
+                        {
+                            "end_period_ts": end_ts - 60,
+                            "yes_bid": {"close_dollars": "0.42"},
+                            "yes_ask": {"close_dollars": "0.48"},
+                        }
+                    ]
+                },
+            )
+        return httpx.Response(404, json={"error": "unexpected request"})
+
+    collector = HistoricalMentionCollector(
+        http_client=httpx.Client(transport=httpx.MockTransport(handler)),
+        max_pages=1,
+        snapshot_samples_per_market=3,
+        snapshot_min_hours_before_close=2,
+        snapshot_max_hours_before_close=48,
+        snapshot_sampling_seed=11,
+    )
+
+    result = collector.collect()
+
+    assert len(result.rows) == 3
+    assert result.stats["rows_written"] == 3
+    offsets = {
+        int((row.close_time - row.snapshot_target_time).total_seconds() / 3600)
+        for row in result.rows
+    }
+    assert len(offsets) == 3
+    assert all(2 <= offset <= 48 for offset in offsets)
+    assert {row.market_ticker for row in result.rows} == {
+        "KXEARNINGSMENTIONAAPL-26JUL30-VISI"
+    }
 
 
 def test_collector_searches_earnings_prefix_without_status_filter():

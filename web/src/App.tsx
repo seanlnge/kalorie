@@ -11,7 +11,12 @@ import { useLiveCurrentMarkets } from '@/hooks/useLiveCurrentMarkets'
 import { useOpenPositions } from '@/hooks/useOpenPositions'
 import { useRiskPresetTrial } from '@/hooks/useRiskPresetTrial'
 import { useWorkstation } from '@/hooks/useWorkstation'
-import { listRiskPresets } from '@/lib/api'
+import {
+  createRiskPreset as createRiskPresetFile,
+  deleteRiskPreset as deleteRiskPresetFile,
+  listRiskPresets,
+  updateRiskPreset as updateRiskPresetFile,
+} from '@/lib/api'
 import { formatDollars } from '@/lib/format'
 import type { AccountSummary, RiskPreset } from '@/lib/types'
 
@@ -48,74 +53,94 @@ function App() {
     }
   }, [])
 
-  const createRiskPreset = (preset: RiskPreset) => {
-    setRiskPresets((current) => {
-      const withoutDuplicate = current.filter((entry) => entry.id !== preset.id)
-      return [...withoutDuplicate, preset]
-    })
-    setSelectedRiskPresetId(preset.id)
+  const createRiskPreset = async (preset: RiskPreset) => {
+    try {
+      const presets = await createRiskPresetFile(preset)
+      setRiskPresets(presets)
+      setSelectedRiskPresetId(preset.id)
+      setRiskPresetError(null)
+    } catch (err) {
+      setRiskPresetError(err instanceof Error ? err.message : 'Failed to save risk preset')
+    }
   }
 
-  const deleteRiskPreset = (presetId: string) => {
-    setRiskPresets((current) => {
-      if (current.length <= 1) return current
-      return current.filter((preset) => preset.id !== presetId)
-    })
-    setSelectedRiskPresetId((current) => {
-      if (current !== presetId) return current
-      return riskPresets.find((preset) => preset.id !== presetId)?.id ?? null
-    })
+  const updateRiskPreset = async (preset: RiskPreset) => {
+    try {
+      const presets = await updateRiskPresetFile(preset)
+      setRiskPresets(presets)
+      setSelectedRiskPresetId(preset.id)
+      setRiskPresetError(null)
+    } catch (err) {
+      setRiskPresetError(err instanceof Error ? err.message : 'Failed to update risk preset')
+    }
+  }
+
+  const deleteRiskPreset = async (presetId: string) => {
+    try {
+      const presets = await deleteRiskPresetFile(presetId)
+      setRiskPresets(presets)
+      setSelectedRiskPresetId((current) => {
+        if (current && presets.some((preset) => preset.id === current)) return current
+        return presets[0]?.id ?? null
+      })
+      setRiskPresetError(null)
+    } catch (err) {
+      setRiskPresetError(err instanceof Error ? err.message : 'Failed to delete risk preset')
+    }
   }
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      <div className="mx-auto flex min-h-screen w-full max-w-[1500px] flex-col bg-background/72">
-        <header className="border-b border-line bg-panel/78 px-4 py-4 shadow-terminal">
-          <div className="flex flex-col gap-4 2xl:flex-row 2xl:items-end 2xl:justify-between">
-            <div className="flex flex-col gap-3">
-              <p className="font-mono text-[10px] uppercase tracking-[0.32em] text-cyan">
-                Kalorie institutional terminal
-              </p>
-              <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight">
-                Earnings mention market workstation
-              </h1>
-              <PortfolioReadout summary={account.summary} />
+      <div className="flex min-h-screen w-full flex-col bg-background/88">
+        <header className="border-b border-line bg-background shadow-terminal">
+          <div className="flex min-h-12 flex-wrap items-center gap-2 px-3 py-1.5">
+            <div className="flex min-w-0 shrink-0 flex-wrap items-center gap-2">
+              <div className="font-mono text-xs font-semibold uppercase tracking-[0.22em] text-cyan">
+                Kalorie
+              </div>
+              <nav className="flex flex-wrap items-center gap-1 rounded-md border border-line bg-panel/58 p-0.5">
+                <ViewButton
+                  active={activeView === 'markets'}
+                  label="Current Markets"
+                  onClick={() => setActiveView('markets')}
+                />
+                <ViewButton
+                  active={activeView === 'history'}
+                  label="Trading History"
+                  onClick={() => setActiveView('history')}
+                />
+                <ViewButton
+                  active={activeView === 'model'}
+                  label="Model Overview"
+                  onClick={() => setActiveView('model')}
+                />
+              </nav>
             </div>
-            <div className="grid gap-3 xl:grid-cols-2">
+            <div className="grid min-w-[24rem] flex-1 grid-cols-[minmax(11rem,1fr)_minmax(11rem,1fr)] gap-2">
               <ModelPickerDropdown
                 models={workstation.models}
                 selectedModelName={workstation.selectedModelName}
                 onSelect={workstation.selectModel}
+                compact
               />
               <RiskPresetDropdown
                 presets={riskPresets}
                 selectedPresetId={selectedRiskPreset?.id ?? null}
                 onSelect={setSelectedRiskPresetId}
-                onCreate={createRiskPreset}
-                onDelete={deleteRiskPreset}
+                compact
               />
             </div>
+            <div className="ml-auto flex shrink-0 flex-wrap items-center gap-3">
+              <PortfolioReadout summary={account.summary} />
+              <span className="inline-flex h-8 items-center gap-2 rounded-lg border border-red/35 bg-red/10 px-3 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-red">
+                <span className="h-1.5 w-1.5 rounded-full bg-red" />
+                Read only
+              </span>
+            </div>
           </div>
-          <nav className="mt-4 grid rounded-xl border border-line bg-background/65 p-1 md:grid-cols-3">
-            <ViewButton
-              active={activeView === 'markets'}
-              label="Current Markets"
-              onClick={() => setActiveView('markets')}
-            />
-            <ViewButton
-              active={activeView === 'history'}
-              label="Trading History"
-              onClick={() => setActiveView('history')}
-            />
-            <ViewButton
-              active={activeView === 'model'}
-              label="Model Overview"
-              onClick={() => setActiveView('model')}
-            />
-          </nav>
         </header>
 
-        <main className="space-y-4 p-4">
+        <main className="space-y-3 p-3">
           {workstation.loading ? (
             <SystemNotice tone="cyan" message="Scanning top-level models/* for valid saved bundles..." />
           ) : null}
@@ -134,6 +159,7 @@ function App() {
             <CurrentMarketsPage
               snapshot={currentMarkets.snapshot}
               loading={currentMarkets.loading}
+              streamStatus={currentMarkets.streamStatus}
               bankroll={account.summary.bankroll}
               onRefresh={currentMarkets.refresh}
             />
@@ -159,6 +185,12 @@ function App() {
               currentMarketsLoading={currentMarkets.loading}
               riskTrial={riskTrial.trial}
               riskTrialLoading={riskTrial.loading}
+              riskPresets={riskPresets}
+              selectedRiskPresetId={selectedRiskPreset?.id ?? null}
+              onSelectRiskPreset={setSelectedRiskPresetId}
+              onCreateRiskPreset={createRiskPreset}
+              onUpdateRiskPreset={updateRiskPreset}
+              onDeleteRiskPreset={deleteRiskPreset}
               onRowIndexChange={workstation.setSelectedRowIndex}
               onExecutionModeChange={workstation.setExecutionMode}
               onScoreSample={workstation.scoreSelectedRow}
@@ -199,11 +231,11 @@ function PortfolioReadout({ summary }: { readonly summary: AccountSummary }) {
       ? `Free ${formatDollars(summary.free_cash)}`
       : `Sizing ${formatDollars(summary.bankroll)}`
   return (
-    <div className="flex flex-wrap items-center gap-3 rounded-lg border border-line bg-background/60 px-3 py-2">
+    <div className="flex h-8 items-center gap-2 font-mono">
       <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
         Portfolio
       </span>
-      <span className="font-mono text-lg font-semibold text-foreground">{portfolioLabel}</span>
+      <span className="font-mono text-sm font-semibold text-foreground">{portfolioLabel}</span>
       <span className="font-mono text-xs text-muted">{freeCashLabel}</span>
     </div>
   )
@@ -221,7 +253,7 @@ function ViewButton({ active, label, onClick }: ViewButtonProps) {
       type="button"
       onClick={onClick}
       className={[
-        'rounded-lg border px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.16em] transition',
+        'rounded px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] transition',
         active
           ? 'border-cyan/70 bg-panelStrong text-cyan shadow-bloom'
           : 'border-transparent text-muted hover:bg-panel hover:text-foreground',

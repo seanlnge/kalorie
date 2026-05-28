@@ -1,7 +1,9 @@
 import math
 import re
 
+from kalorie2.company_metadata import default_company_metadata_features
 from kalorie2.event_scenarios import EventScenarioCatalog, TargetPhraseContext
+from kalorie2.phrase_semantics import default_antonym_axis_features
 from kalorie2.prediction_types import PredictionInputRow
 from kalorie2.transcript_model import _split_min_count, _word_options, _word_tokens
 from kalorie2.web_evidence import WebEvidencePacket
@@ -114,6 +116,13 @@ def extract_market_features(row: PredictionInputRow) -> dict[str, float]:
     bid = float(row.preclose_yes_bid)
     ask = float(row.preclose_yes_ask)
     spread = max(0.0, ask - bid)
+    bid_size = float(row.preclose_yes_bid_size)
+    ask_size = float(row.preclose_yes_ask_size)
+    total_size = bid_size + ask_size
+    hours_before_close = max(
+        0.0,
+        (row.close_time - row.snapshot_target_time).total_seconds() / 3600.0,
+    )
     return {
         "market_yes_bid": bid,
         "market_yes_ask": ask,
@@ -125,8 +134,42 @@ def extract_market_features(row: PredictionInputRow) -> dict[str, float]:
         "market_no_ask": min(1.0, 1.0 - bid),
         "market_bid_present": 1.0 if bid > 0.0 else 0.0,
         "market_ask_present": 1.0 if ask > 0.0 else 0.0,
+        "market_preclose_volume": float(row.preclose_volume),
+        "market_preclose_volume_present": 1.0 if row.preclose_volume > 0 else 0.0,
+        "market_preclose_volume_log": math.log1p(row.preclose_volume),
+        "market_preclose_open_interest": float(row.preclose_open_interest),
+        "market_preclose_open_interest_present": (
+            1.0 if row.preclose_open_interest > 0 else 0.0
+        ),
+        "market_preclose_open_interest_log": math.log1p(row.preclose_open_interest),
+        "market_preclose_yes_bid_size": bid_size,
+        "market_preclose_yes_ask_size": ask_size,
+        "market_preclose_size_imbalance": (
+            (bid_size - ask_size) / total_size if total_size > 0.0 else 0.0
+        ),
         "snapshot_staleness_seconds": float(row.snapshot_staleness_seconds),
         "snapshot_staleness_hours": row.snapshot_staleness_seconds / 3600.0,
+        "hours_before_close": hours_before_close,
+        "log_hours_before_close": math.log1p(hours_before_close),
+        "hours_before_close_bucket_2_6": _bucket_flag(hours_before_close, 2.0, 6.0),
+        "hours_before_close_bucket_6_12": _bucket_flag(hours_before_close, 6.0, 12.0),
+        "hours_before_close_bucket_12_24": _bucket_flag(hours_before_close, 12.0, 24.0),
+        "hours_before_close_bucket_24_48": _bucket_flag(hours_before_close, 24.0, 48.0),
+        "company_prior_call_count": float(row.company_prior_call_count),
+        "company_avg_call_duration_minutes_prior": row.company_avg_call_duration_minutes_prior,
+        "company_avg_qa_question_count_prior": row.company_avg_qa_question_count_prior,
+        "company_avg_prepared_remarks_minutes_prior": (
+            row.company_avg_prepared_remarks_minutes_prior
+        ),
+        "company_qa_share_prior": row.company_qa_share_prior,
+        "company_question_count_trend_prior": row.company_question_count_trend_prior,
+        "company_transcript_coverage_count": float(row.company_transcript_coverage_count),
+        "company_transcript_style_available": float(row.company_transcript_style_available),
+        "company_transcript_style_missing": (
+            0.0 if row.company_transcript_style_available else 1.0
+        ),
+        "company_avg_transcript_word_count_prior": row.company_avg_transcript_word_count_prior,
+        "company_avg_phrase_mentions_prior": row.company_avg_phrase_mentions_prior,
     }
 
 
@@ -149,6 +192,7 @@ def extract_phrase_features(row: PredictionInputRow) -> dict[str, float]:
         else 0.0,
         "phrase_is_entity_like": 1.0 if _looks_entity_like(row.word_said) else 0.0,
         **_semantic_bucket_features(base_phrase),
+        **default_antonym_axis_features(base_phrase),
     }
 
 
@@ -243,6 +287,7 @@ def build_feature_row(
 ) -> dict[str, float]:
     features = {
         **extract_market_features(row),
+        **default_company_metadata_features(row.series_ticker),
         **extract_phrase_features(row),
         **extract_resolution_features(row),
         **extract_scenario_features(row, catalog),
@@ -274,6 +319,10 @@ def build_feature_matrix(
 def _safe_logit(probability: float) -> float:
     clipped = min(0.999999, max(0.000001, probability))
     return math.log(clipped / (1.0 - clipped))
+
+
+def _bucket_flag(value: float, low: float, high: float) -> float:
+    return 1.0 if low <= value < high else 0.0
 
 
 def _target_base_phrase(row: PredictionInputRow) -> str:

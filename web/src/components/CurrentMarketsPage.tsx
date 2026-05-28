@@ -2,16 +2,23 @@ import { ChevronDown, RefreshCcw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
 import { formatDollars, formatInteger, formatProbability, formatSigned } from '@/lib/format'
-import type { PollPredictionRow, PollSnapshot } from '@/lib/types'
+import type { CurrentMarketsStreamStatus, PollPredictionRow, PollSnapshot } from '@/lib/types'
 
 export interface CurrentMarketsPageProps {
   readonly snapshot: PollSnapshot | null
   readonly loading: boolean
+  readonly streamStatus: CurrentMarketsStreamStatus
   readonly bankroll: number
   readonly onRefresh: () => void
 }
 
-export function CurrentMarketsPage({ snapshot, loading, bankroll, onRefresh }: CurrentMarketsPageProps) {
+export function CurrentMarketsPage({
+  snapshot,
+  loading,
+  streamStatus,
+  bankroll,
+  onRefresh,
+}: CurrentMarketsPageProps) {
   const eventGroups = useMemo(() => groupByEvent(snapshot?.prediction_rows ?? []), [snapshot])
   const [closedEvents, setClosedEvents] = useState<Set<string>>(new Set())
   const [now, setNow] = useState(() => Date.now())
@@ -60,16 +67,17 @@ export function CurrentMarketsPage({ snapshot, loading, bankroll, onRefresh }: C
     setClosedEvents(new Set(eventGroups.map((group) => group.eventTicker)))
 
   return (
-    <section className="space-y-4">
-      <div className="grid gap-3 md:grid-cols-[repeat(4,minmax(0,1fr))_auto]">
+    <section className="space-y-3">
+      <div className="flex min-h-10 flex-wrap items-center gap-x-5 gap-y-2 rounded-lg border border-line bg-panel/70 px-3 py-2 shadow-terminal">
         <MarketMetric label="Poll" value={formatPollTimers(snapshot, now, loading)} />
+        <MarketMetric label="Stream" value={formatStreamStatus(streamStatus)} tone={streamTone(streamStatus)} />
         <MarketMetric label="Events" value={formatInteger(eventGroups.length)} />
         <MarketMetric label="Markets" value={formatInteger(snapshot?.market_count)} />
         <MarketMetric label="Trades" value={formatInteger(snapshot?.trade_count)} tone="text-green" />
         <button
           type="button"
           onClick={onRefresh}
-          className="inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-background px-4 py-3 font-mono text-xs font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-cyan/60"
+          className="ml-auto inline-flex items-center justify-center gap-2 rounded border border-line bg-background px-3 py-1.5 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-foreground transition hover:border-cyan/60"
         >
           <RefreshCcw size={16} />
           Refresh
@@ -77,10 +85,9 @@ export function CurrentMarketsPage({ snapshot, loading, bankroll, onRefresh }: C
       </div>
 
       {eventGroups.length > 0 ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-panel/70 px-4 py-3">
-          <p className="max-w-2xl text-sm text-muted">
-            Showing trade-bearing events open first. Expand the full board when you want to inspect
-            every contract.
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-panel/70 px-3 py-2">
+          <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted">
+            Opportunity board / trade-bearing events open first
           </p>
           <div className="flex flex-wrap gap-2">
             <button
@@ -106,8 +113,8 @@ export function CurrentMarketsPage({ snapshot, loading, bankroll, onRefresh }: C
           loading ? (
             <InferenceSkeletonCard />
           ) : (
-            <div className="rounded-lg border border-amber/35 bg-amber/10 p-5 text-sm text-amber">
-              No active markets returned yet.
+            <div className="rounded-lg border border-amber/35 bg-amber/10 p-5 font-mono text-xs uppercase tracking-[0.12em] text-amber">
+              System_idle: no_active_markets returned yet.
             </div>
           )
         ) : (
@@ -219,11 +226,11 @@ function EventMarketGroup({
             onToggle()
           }
         }}
-        className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 border-b border-line bg-panelStrong/55 px-4 py-3 text-left outline-none transition hover:border-cyan/40 focus-visible:ring-1 focus-visible:ring-cyan/70"
+        className="flex w-full cursor-pointer flex-wrap items-center justify-between gap-3 border-b border-line bg-panelStrong/55 px-3 py-2 text-left outline-none transition hover:border-cyan/40 focus-visible:ring-1 focus-visible:ring-cyan/70"
       >
         <div className="min-w-0">
           <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">Event</p>
-          <h2 className="font-display text-base font-semibold text-foreground">
+          <h2 className="font-display text-sm font-semibold text-foreground">
             {group.eventTitle || group.eventTicker}
           </h2>
           <p className="mt-0.5 break-all font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
@@ -234,22 +241,22 @@ function EventMarketGroup({
           </p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded border border-line bg-background px-3 py-1 font-mono text-xs text-foreground">
+          <span className="rounded border border-line bg-background px-2 py-1 font-mono text-[11px] text-foreground">
             Total EV {formatSigned(group.totalExpectedEv)}
           </span>
-          <span className="rounded border border-line bg-background px-3 py-1 font-mono text-xs text-muted">
+          <span className="rounded border border-line bg-background px-2 py-1 font-mono text-[11px] text-muted">
             Trade {formatProbability(group.tradePercent)}
           </span>
-          <span className="rounded border border-line bg-background px-3 py-1 font-mono text-xs text-muted">
+          <span className="rounded border border-line bg-background px-2 py-1 font-mono text-[11px] text-muted">
             EV/10 mkts {formatSigned(group.evPer10Markets)}
           </span>
-          <span className="rounded border border-line bg-background px-3 py-1 font-mono text-xs text-muted">
+          <span className="rounded border border-line bg-background px-2 py-1 font-mono text-[11px] text-muted">
             Σ spread {formatProbability(group.totalSpread)}
           </span>
-          <span className="rounded border border-line bg-background px-3 py-1 font-mono text-xs text-muted">
+          <span className="rounded border border-line bg-background px-2 py-1 font-mono text-[11px] text-muted">
             Avg spread {formatProbability(group.averageSpread)}
           </span>
-          <span className="rounded border border-line bg-background px-3 py-1 font-mono text-xs text-muted">
+          <span className="rounded border border-line bg-background px-2 py-1 font-mono text-[11px] text-muted">
             {group.rows.length} markets
           </span>
           <ChevronDown
@@ -259,40 +266,43 @@ function EventMarketGroup({
         </div>
       </div>
       {open ? <div className="overflow-x-auto">
-        <table className="min-w-full border-collapse text-sm">
-          <thead className="bg-background/70 font-mono text-[10px] uppercase tracking-[0.14em] text-muted">
+        <table className="w-full table-fixed border-collapse text-xs">
+          <thead className="bg-background/70 font-mono text-[9px] uppercase tracking-[0.14em] text-muted">
             <tr>
-              <th className="px-3 py-2 text-left font-medium">Market</th>
-              <th className="px-3 py-2 text-left font-medium">Phrase</th>
-              <th className="px-3 py-2 text-left font-medium">Action</th>
-              <th className="px-3 py-2 text-right font-medium">Expected</th>
-              <th className="px-3 py-2 text-right font-medium">Bid</th>
-              <th className="px-3 py-2 text-right font-medium">Ask</th>
-              <th className="px-3 py-2 text-right font-medium">Spread</th>
-              <th className="px-3 py-2 text-right font-medium">EV/Contract</th>
-              <th className="px-3 py-2 text-right font-medium">Buy</th>
+              <th className="w-[23%] px-3 py-2 text-left font-medium">Market</th>
+              <th className="w-[12%] px-3 py-2 text-left font-medium">Phrase</th>
+              <th className="w-[8%] px-3 py-2 text-center font-medium">Action</th>
+              <th className="w-[8%] px-3 py-2 text-right font-medium">Model</th>
+              <th className="w-[8%] px-3 py-2 text-right font-medium">Market</th>
+              <th className="w-[11%] px-3 py-2 text-right font-medium">Bid / Ask</th>
+              <th className="w-[8%] px-3 py-2 text-right font-medium">Spread</th>
+              <th className="w-[9%] px-3 py-2 text-right font-medium">EV</th>
+              <th className="w-[8%] px-3 py-2 text-right font-medium">Size</th>
+              <th className="w-[5%] px-3 py-2 text-center font-medium">Risk</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-line/70">
             {group.rows.map((row) => (
               <tr key={row.market_ticker} className="hover:bg-panelStrong/35">
-                <td className="max-w-[18rem] px-3 py-2">
-                  <p className="break-all font-mono text-xs font-semibold text-foreground">
+                <td className="min-w-0 px-3 py-2">
+                  <p className="truncate font-mono text-xs font-semibold text-foreground" title={row.market_ticker}>
                     {row.market_ticker}
                   </p>
                   <p className="mt-1 font-mono text-[10px] uppercase tracking-[0.12em] text-muted">
                     Vol {formatInteger(row.volume)}
                   </p>
                 </td>
-                <td className="px-3 py-2 text-muted">{row.target_phrase || '--'}</td>
-                <td className="px-3 py-2">
+                <td className="truncate px-3 py-2 text-muted" title={row.target_phrase || '--'}>{row.target_phrase || '--'}</td>
+                <td className="px-3 py-2 text-center">
                   <SideBadge side={row.side} />
                 </td>
                 <td className="px-3 py-2 text-right font-mono text-foreground">
                   {formatProbability(row.model_probability)}
                 </td>
-                <td className="px-3 py-2 text-right font-mono">{formatProbability(row.yes_bid)}</td>
-                <td className="px-3 py-2 text-right font-mono">{formatProbability(row.yes_ask)}</td>
+                <td className="px-3 py-2 text-right font-mono">{formatProbability(row.market_probability)}</td>
+                <td className="whitespace-nowrap px-3 py-2 text-right font-mono">
+                  {formatProbability(row.yes_bid)} / {formatProbability(row.yes_ask)}
+                </td>
                 <td className="px-3 py-2 text-right font-mono text-muted">
                   {formatProbability(row.yes_ask - row.yes_bid)}
                 </td>
@@ -305,6 +315,9 @@ function EventMarketGroup({
                 </td>
                 <td className="px-3 py-2 text-right">
                   <TradeSize row={row} bankroll={bankroll} />
+                </td>
+                <td className="px-3 py-2 text-center">
+                  <RiskFlag row={row} />
                 </td>
               </tr>
             ))}
@@ -342,6 +355,13 @@ function tradeSize(
 ): { dollars: number; contracts: number; contractCost: number } | null {
   if (row.side !== 'YES' && row.side !== 'NO') return null
   if (row.passes_risk_filter === false) return null
+  if (row.recommended_dollars && row.recommended_contracts) {
+    return {
+      dollars: row.recommended_dollars,
+      contracts: row.recommended_contracts,
+      contractCost: row.cost,
+    }
+  }
   const recommendedFraction = row.recommended_fraction ?? 0
   if (recommendedFraction <= 0 || bankroll <= 0 || row.cost <= 0) return null
   const rawDollars = bankroll * recommendedFraction
@@ -364,6 +384,17 @@ function SideBadge({ side }: { readonly side: string }) {
   )
 }
 
+function RiskFlag({ row }: { readonly row: PollPredictionRow }) {
+  const tradable = row.side === 'YES' || row.side === 'NO'
+  if (row.passes_risk_filter === false) {
+    return <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-red">Blocked</span>
+  }
+  if (tradable) {
+    return <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.12em] text-green">Pass</span>
+  }
+  return <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-muted">--</span>
+}
+
 function sideTone(side: string): string {
   if (side === 'YES') return 'border-green/30 bg-green/10 text-green'
   if (side === 'NO') return 'border-red/30 bg-red/10 text-red'
@@ -380,17 +411,32 @@ function MarketMetric({
   readonly tone?: string
 }) {
   return (
-    <div className="rounded-lg border border-line bg-panel/75 p-4 shadow-terminal">
-      <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">{label}</p>
-      <p className={`mt-2 break-all font-mono text-lg font-semibold leading-6 ${tone}`}>{value}</p>
+    <div className="flex items-baseline gap-2 font-mono">
+      <span className="text-[10px] uppercase tracking-[0.18em] text-muted">{label}</span>
+      <span className={`text-sm font-semibold ${tone}`}>{value}</span>
     </div>
   )
 }
 
 function formatPollTimers(snapshot: PollSnapshot | null, now: number, loading: boolean): string {
-  const kal = loading && !snapshot ? 'polling...' : formatTimeLeft(snapshot?.next_market_poll_at, now)
+  const kal = loading && !snapshot ? 'refreshing...' : formatTimeLeft(snapshot?.next_market_poll_at, now)
   const run = formatTimeLeft(snapshot?.next_model_run_at, now)
-  return `Kal: ${kal}; Run: ${run}`
+  return `Full: ${kal}; Run: ${run}`
+}
+
+function formatStreamStatus(status: CurrentMarketsStreamStatus): string {
+  if (status === 'idle') return '--'
+  if (status === 'connecting') return 'connecting'
+  if (status === 'live') return 'live'
+  if (status === 'stale') return 'reconnecting'
+  return 'error'
+}
+
+function streamTone(status: CurrentMarketsStreamStatus): string {
+  if (status === 'live') return 'text-green'
+  if (status === 'error') return 'text-red'
+  if (status === 'stale') return 'text-amber'
+  return 'text-muted'
 }
 
 function formatTimeLeft(value: string | null | undefined, now: number): string {

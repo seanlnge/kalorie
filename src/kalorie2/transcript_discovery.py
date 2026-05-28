@@ -16,11 +16,15 @@ class TranscriptSourceCandidate(TranscriptDiscoveryModel):
     source_url: str = Field(min_length=1)
     source_name: str = Field(min_length=1)
     published_at: datetime | None
+    call_date: datetime | None = None
+    call_duration_minutes: float | None = Field(default=None, ge=0.0)
+    qa_question_count: int | None = Field(default=None, ge=0)
+    prepared_remarks_minutes: float | None = Field(default=None, ge=0.0)
     transcript_candidate: bool
     confidence: float = Field(ge=0.0, le=1.0)
     rationale: str = Field(min_length=1)
 
-    @field_validator("published_at")
+    @field_validator("published_at", "call_date")
     @classmethod
     def normalize_published_at(cls, value: datetime | None) -> datetime | None:
         if value is None:
@@ -58,6 +62,8 @@ def build_transcript_discovery_prompt(
             "Do not rely on memory; every candidate must come from a discoverable source URL.",
             "Return transcript_candidate=false for previews, recaps, audio pages, or pages that "
             "are not likely to contain the raw transcript text.",
+            "When visible in the source, include call_date, call_duration_minutes, "
+            "qa_question_count, and prepared_remarks_minutes; otherwise use null.",
             "The downstream matcher will verify cached transcript text deterministically.",
         ],
         "required_schema": _transcript_discovery_schema(),
@@ -108,6 +114,16 @@ def _transcript_discovery_schema() -> dict[str, Any]:
                         "source_url": {"type": "string"},
                         "source_name": {"type": "string"},
                         "published_at": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "call_date": {"anyOf": [{"type": "string"}, {"type": "null"}]},
+                        "call_duration_minutes": {
+                            "anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]
+                        },
+                        "qa_question_count": {
+                            "anyOf": [{"type": "integer", "minimum": 0}, {"type": "null"}]
+                        },
+                        "prepared_remarks_minutes": {
+                            "anyOf": [{"type": "number", "minimum": 0}, {"type": "null"}]
+                        },
                         "transcript_candidate": {"type": "boolean"},
                         "confidence": {"type": "number", "minimum": 0, "maximum": 1},
                         "rationale": {"type": "string"},
@@ -117,6 +133,10 @@ def _transcript_discovery_schema() -> dict[str, Any]:
                         "source_url",
                         "source_name",
                         "published_at",
+                        "call_date",
+                        "call_duration_minutes",
+                        "qa_question_count",
+                        "prepared_remarks_minutes",
                         "transcript_candidate",
                         "confidence",
                         "rationale",

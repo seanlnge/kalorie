@@ -16,6 +16,7 @@ class WebEvidenceItem(WebEvidenceModel):
     title: str = Field(min_length=1)
     url: str = Field(min_length=1)
     source: str = Field(min_length=1)
+    source_type: Literal["company", "sec", "news", "analyst", "other"] = "other"
     published_at: datetime | None
     snippet: str = Field(min_length=1)
     target_phrases: list[str] = Field(default_factory=list)
@@ -161,6 +162,7 @@ def build_web_evidence_prompt(
             "If a source publication time is unavailable, include published_at as null.",
             "Set relevance_score to how specifically the source informs the target phrase, "
             "and evidence_direction to support, against, or neutral.",
+            "Set source_type to one of company, sec, news, analyst, or other.",
         ],
         "required_schema": _web_evidence_schema(),
     }
@@ -210,6 +212,10 @@ def _web_evidence_schema() -> dict[str, Any]:
                         "title": {"type": "string"},
                         "url": {"type": "string"},
                         "source": {"type": "string"},
+                        "source_type": {
+                            "type": "string",
+                            "enum": ["company", "sec", "news", "analyst", "other"],
+                        },
                         "published_at": {"anyOf": [{"type": "string"}, {"type": "null"}]},
                         "snippet": {"type": "string"},
                         "target_phrases": {
@@ -235,6 +241,7 @@ def _web_evidence_schema() -> dict[str, Any]:
                         "title",
                         "url",
                         "source",
+                        "source_type",
                         "published_at",
                         "snippet",
                         "target_phrases",
@@ -271,6 +278,8 @@ def _source_type_flags(items: list[WebEvidenceItem]) -> dict[str, float]:
 
 
 def _source_type(item: WebEvidenceItem) -> str:
+    if item.source_type != "other":
+        return item.source_type
     text = " ".join([item.source, item.url, item.title]).lower()
     if "sec.gov" in text or re.search(r"\bsec\b", text) or "10-q" in text or "10-k" in text:
         return "sec"

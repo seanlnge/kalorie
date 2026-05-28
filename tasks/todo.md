@@ -1223,3 +1223,67 @@ Verification:
 Review notes:
 
 - Fixed reviewer findings around Kalshi doc-shaped position payloads (`position_fp`, `total_traded_dollars`), visible position-fetch errors, average buy aggregation when prices are missing, and held-position model EV calculation.
+
+### Follow-Up: Metric-First Feature Pass
+
+Goal:
+
+- Optimize probability quality with Brier, ECE, and log loss as primary engine metrics.
+- Add deterministic feature families for Kalshi microstructure, sparse transcript company style, GPT-seeded company metadata, and embedding antonym phrase semantics.
+- Keep latest-30 temporal holdout clean: model selection happens on older rolling folds; latest-30 remains report-only.
+
+Implementation checklist:
+
+- [ ] Add failing tests for log-loss/ECE summary metrics and sweep ordering by log loss/Brier before ROI.
+- [ ] Implement probability-quality metrics in `prediction_cli.py` and update sweep CSV/JSON outputs.
+- [ ] Add failing tests for candle-aligned `volume`, `open_interest`, and optional size fields in `select_preclose_snapshot`.
+- [ ] Extend `PrecloseSnapshot`, `HistoricalMentionMarketRow`, CSV artifacts, and `extract_market_features` with microstructure features.
+- [ ] Add a checked-in `data/company_metadata.json` seeded from known company/event tickers with sector, industry, market-cap bucket, and style tags.
+- [ ] Implement strict local metadata parsing and feature extraction; no web/API lookup during scoring.
+- [ ] Add sparse-aware transcript style features: coverage flags, transcript count, average word count, phrase-count intensity, and missingness flags.
+- [ ] Add embedding antonym-axis utilities and phrase features using cached embeddings only.
+- [ ] Verify with focused tests, full pytest, ruff, latest-30 holdout smoke, and code review.
+
+Verification:
+
+- `python -m pytest -q`: 167 passed.
+- `python -m ruff check .`: All checks passed.
+- Strict latest-30 holdout smoke: 234 training events, 30 holdout events, 380 holdout rows, 380 predictions, and `0` holdout events in training lists.
+- Latest-30 probability metrics after this feature pass: Brier `0.158909` vs market `0.163622`; log loss `0.477366` vs market `0.490595`; ECE `0.045073` vs market `0.058474`.
+- Latest-30 trade diagnostics, reported only as secondary context: all trades `267`, PnL `12.71`, ROI `0.076433`; NO-only trades `193`, PnL `12.16`, ROI `0.111724`.
+
+Review notes:
+
+- Final review found no logic blocker in the feature pass after `.gitignore` was updated to allow deterministic `data/company_metadata.json` and `data/phrase_semantic_embeddings.json` artifacts.
+- Clean-checkout reproducibility requires those two data files to be included in the eventual commit; they are intentionally untracked until commit time.
+
+### Saved Model Bundle: `kalorie-v4`
+
+Goal: package the metric-first feature pass as `models/kalorie-v4/`, including the model card and all runtime/training artifacts needed by the saved-model workstation.
+
+Plan/results:
+
+- [x] Map the existing `kalorie-v2`/`kalorie-v3` saved-model artifact layout and model-card generation flow.
+- [x] Fit the v4 saved runtime weights with `target_side=no`, `positive_label_weight=2.0`, `feature_ablation_group=resolution`, and default NO-only margin `0.02`.
+- [x] Save `model.json`, `feature-schema.json`, `training-manifest.json`, `evaluation-reports.json`, `model-card.json`, `model-card.schema.json`, and `risk-preset-trials.json` under `models/kalorie-v4/artifacts/`.
+- [x] Save the historical training CSV, cached web-evidence packets, company metadata seed, and phrase semantic embedding seed under `models/kalorie-v4/training/`.
+- [x] Save the v4 runtime scorer under `models/kalorie-v4/runtime/model_runtime.py`.
+- [x] Verify runtime scoring, artifact integrity, model-card validation, saved-model registry discovery, focused tests, and runtime lints.
+
+Validation snapshot:
+
+- Latest-30 temporal holdout, trained only on events before the latest 30: Brier `0.162200` vs market `0.163622`; log loss `0.486740` vs market `0.490595`; ECE `0.056763` vs market `0.058474`.
+- Latest-30 NO-only margin `0.02`: `9` trades, PnL `2.28`, ROI `48.31%`.
+- Full event-ordered walk-forward: Brier `0.120783` vs market `0.121697`; log loss `0.367244` vs market `0.369576`; ECE `0.040023` vs market `0.045475`.
+- Full NO-only margin `0.02`: `21` trades, PnL `4.31`, ROI `36.87%`.
+
+Verification:
+
+- `python models/kalorie-v4/runtime/model_runtime.py --row-index 0`: loaded the saved model and scored row `0`.
+- Artifact assertion script: required files exist, JSON parses, model card validates, `113` features and `51` nonzero weights recorded, and `kalorie-v4` loads through `SavedModelRegistry`.
+- `python -m pytest tests/test_model_cards.py tests/test_saved_models.py -q`: 13 passed.
+- IDE diagnostics: no linter errors found for `models/kalorie-v4/runtime/model_runtime.py`.
+
+Caveat:
+
+- The bundled historical CSV predates a fully recollected random-snapshot/microstructure corpus, so newly added market microstructure and sparse transcript fields are active where present and otherwise use default/missingness-aware feature values. The v4 feature code and deterministic seed artifacts are included for the next recollected corpus.

@@ -49,9 +49,23 @@ def test_build_transcript_predictions_uses_prior_transcripts_and_walk_forward_mu
     transcript_root = tmp_path / "earnings_call_transcripts"
     apple_dir = transcript_root / "Apple"
     apple_dir.mkdir(parents=True)
-    (apple_dir / "2024_Q1_aapl_processed.txt").write_text("AI margin.", encoding="utf-8")
-    (apple_dir / "2024_Q2_aapl_processed.txt").write_text("AI.", encoding="utf-8")
-    (apple_dir / "2025_Q1_aapl_processed.txt").write_text("No target.", encoding="utf-8")
+    (apple_dir / "2024_Q1_aapl_processed.txt").write_text(
+        "Published at: 2024-04-01T00:00:00Z\n"
+        "Call duration: 50 minutes\nPrepared remarks: 20 minutes\n"
+        "Question-and-Answer Session\nAnalyst: AI margin?\nAnalyst: Revenue?",
+        encoding="utf-8",
+    )
+    (apple_dir / "2024_Q2_aapl_processed.txt").write_text(
+        "Published at: 2024-07-01T00:00:00Z\n"
+        "Call duration: 70 minutes\nPrepared remarks: 28 minutes\n"
+        "Question-and-Answer Session\nAnalyst: AI?\nAnalyst: Margin?\nAnalyst: Demand?",
+        encoding="utf-8",
+    )
+    (apple_dir / "2025_Q1_aapl_processed.txt").write_text(
+        "Call duration: 90 minutes\nPrepared remarks: 30 minutes\n"
+        "Question-and-Answer Session\nAnalyst: No target?",
+        encoding="utf-8",
+    )
 
     rows = [
         {
@@ -91,12 +105,84 @@ def test_build_transcript_predictions_uses_prior_transcripts_and_walk_forward_mu
 
     assert predicted[0]["transcript_prior_count"] == "2"
     assert predicted[0]["transcript_hit_count"] == "2"
+    assert predicted[0]["company_prior_call_count"] == "2"
+    assert predicted[0]["company_avg_call_duration_minutes_prior"] == "60.000000"
+    assert predicted[0]["company_avg_qa_question_count_prior"] == "2.500000"
+    assert predicted[0]["company_avg_prepared_remarks_minutes_prior"] == "24.000000"
+    assert predicted[0]["company_qa_share_prior"] == "0.600000"
+    assert predicted[0]["company_transcript_coverage_count"] == "2"
+    assert predicted[0]["company_transcript_style_available"] == "1"
+    assert float(predicted[0]["company_avg_transcript_word_count_prior"]) > 0.0
+    assert predicted[0]["company_avg_phrase_mentions_prior"] == "1.000000"
     assert predicted[0]["historical_transcript_rate"] == "1.000000"
     assert predicted[0]["transcript_model_probability"] == "1.000000"
     assert predicted[1]["transcript_prior_count"] == "3"
     assert predicted[1]["transcript_hit_count"] == "2"
     assert predicted[1]["word_multiplier_observations"] == "1"
     assert predicted[1]["transcript_model_probability"] == "0.666667"
+
+
+def test_call_structure_features_require_explicit_publication_metadata(tmp_path: Path):
+    transcript_root = tmp_path / "earnings_call_transcripts"
+    apple_dir = transcript_root / "Apple"
+    apple_dir.mkdir(parents=True)
+    (apple_dir / "2024_Q1_aapl_processed.txt").write_text(
+        "Call duration: 50 minutes\nPrepared remarks: 20 minutes\n"
+        "Question-and-Answer Session\nAnalyst: AI?",
+        encoding="utf-8",
+    )
+    rows = [
+        {
+            "market_ticker": "KXEARNINGSMENTIONAAPL-24JUL30-AI",
+            "event_ticker": "KXEARNINGSMENTIONAAPL-24JUL30",
+            "series_ticker": "KXEARNINGSMENTIONAAPL",
+            "event_phrase": "What will Apple say during their next earnings call?",
+            "word_said": "AI",
+            "normalized_word_said": "ai",
+            "close_time": "2024-07-30T20:00:00Z",
+            "preclose_yes_bid": "0.20",
+            "preclose_yes_ask": "0.30",
+            "preclose_yes_mid": "0.25",
+            "final_outcome": "yes",
+        }
+    ]
+
+    predicted = build_transcript_predictions(rows, transcript_root=transcript_root)
+
+    assert predicted[0]["transcript_prior_count"] == "1"
+    assert predicted[0]["company_prior_call_count"] == "0"
+    assert predicted[0]["company_avg_call_duration_minutes_prior"] == "0.000000"
+
+
+def test_call_structure_publication_metadata_normalizes_naive_timestamps(tmp_path: Path):
+    transcript_root = tmp_path / "earnings_call_transcripts"
+    apple_dir = transcript_root / "Apple"
+    apple_dir.mkdir(parents=True)
+    (apple_dir / "2024_Q1_aapl_processed.txt").write_text(
+        "Published at: 2024-04-01T00:00:00\n"
+        "Call duration: 50 minutes\nPrepared remarks: 20 minutes\n"
+        "Question-and-Answer Session\nAnalyst: AI?",
+        encoding="utf-8",
+    )
+    rows = [
+        {
+            "market_ticker": "KXEARNINGSMENTIONAAPL-24JUL30-AI",
+            "event_ticker": "KXEARNINGSMENTIONAAPL-24JUL30",
+            "series_ticker": "KXEARNINGSMENTIONAAPL",
+            "event_phrase": "What will Apple say during their next earnings call?",
+            "word_said": "AI",
+            "normalized_word_said": "ai",
+            "close_time": "2024-07-30T20:00:00Z",
+            "preclose_yes_bid": "0.20",
+            "preclose_yes_ask": "0.30",
+            "preclose_yes_mid": "0.25",
+            "final_outcome": "yes",
+        }
+    ]
+
+    predicted = build_transcript_predictions(rows, transcript_root=transcript_root)
+
+    assert predicted[0]["company_prior_call_count"] == "1"
 
 
 def test_transcript_model_cli_writes_prediction_report(tmp_path: Path):

@@ -1,4 +1,5 @@
 import { FileJson2 } from 'lucide-react'
+import { useState } from 'react'
 
 import { ExecutionModeControl } from '@/components/ExecutionModeControl'
 import { ModelMetrics } from '@/components/ModelMetrics'
@@ -6,6 +7,7 @@ import { PollPredictionTable } from '@/components/PollPredictionTable'
 import { PredictionTable } from '@/components/PredictionTable'
 import { RiskReturnBandChart } from '@/components/RiskReturnBandChart'
 import { ScoringPanel } from '@/components/ScoringPanel'
+import { useRiskPresetTrials } from '@/hooks/useRiskPresetTrials'
 import { formatInteger, formatProbability, formatSigned } from '@/lib/format'
 import type {
   ExecutionMode,
@@ -29,6 +31,12 @@ export interface ModelOverviewPageProps {
   readonly currentMarketsLoading: boolean
   readonly riskTrial: RiskPresetTrial | null
   readonly riskTrialLoading: boolean
+  readonly riskPresets: readonly RiskPreset[]
+  readonly selectedRiskPresetId: string | null
+  readonly onSelectRiskPreset: (presetId: string) => void
+  readonly onCreateRiskPreset: (preset: RiskPreset) => void
+  readonly onUpdateRiskPreset: (preset: RiskPreset) => void
+  readonly onDeleteRiskPreset: (presetId: string) => void
   readonly onRowIndexChange: (rowIndex: number) => void
   readonly onExecutionModeChange: (mode: ExecutionMode) => void
   readonly onScoreSample: () => Promise<void>
@@ -47,12 +55,19 @@ export function ModelOverviewPage({
   currentMarketsLoading,
   riskTrial,
   riskTrialLoading,
+  riskPresets,
+  selectedRiskPresetId,
+  onSelectRiskPreset,
+  onCreateRiskPreset,
+  onUpdateRiskPreset,
+  onDeleteRiskPreset,
   onRowIndexChange,
   onExecutionModeChange,
   onScoreSample,
   onScoreUpload,
 }: ModelOverviewPageProps) {
   const card = model?.model_card
+  const riskTrials = useRiskPresetTrials(model, riskPresets)
 
   return (
     <section className="space-y-4">
@@ -68,6 +83,18 @@ export function ModelOverviewPage({
       )}
 
       <RiskReturnBandChart trial={riskTrial} loading={riskTrialLoading} />
+
+      <RiskPresetWorkbench
+        presets={riskPresets}
+        trialsByPresetId={riskTrials.trialsByPresetId}
+        loadingIds={riskTrials.loadingIds}
+        error={riskTrials.error}
+        selectedPresetId={selectedRiskPresetId}
+        onSelect={onSelectRiskPreset}
+        onCreate={onCreateRiskPreset}
+        onUpdate={onUpdateRiskPreset}
+        onDelete={onDeleteRiskPreset}
+      />
 
       <ModelMetrics model={model} />
 
@@ -259,6 +286,278 @@ function RiskPresetPanel({
       </div>
     </aside>
   )
+}
+
+function RiskPresetWorkbench({
+  presets,
+  trialsByPresetId,
+  loadingIds,
+  error,
+  selectedPresetId,
+  onSelect,
+  onCreate,
+  onUpdate,
+  onDelete,
+}: {
+  readonly presets: readonly RiskPreset[]
+  readonly trialsByPresetId: ReadonlyMap<string, RiskPresetTrial>
+  readonly loadingIds: ReadonlySet<string>
+  readonly error: string | null
+  readonly selectedPresetId: string | null
+  readonly onSelect: (presetId: string) => void
+  readonly onCreate: (preset: RiskPreset) => void
+  readonly onUpdate: (preset: RiskPreset) => void
+  readonly onDelete: (presetId: string) => void
+}) {
+  const selected = presets.find((preset) => preset.id === selectedPresetId) ?? presets[0] ?? null
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [draft, setDraft] = useState<RiskPreset | null>(null)
+
+  const startEditing = (preset: RiskPreset) => {
+    setEditingId(preset.id)
+    setDraft(preset)
+  }
+  const cancelEditing = () => {
+    setEditingId(null)
+    setDraft(null)
+  }
+  const updateDraft = <K extends keyof RiskPreset>(key: K, value: RiskPreset[K]) => {
+    setDraft((current) => (current ? { ...current, [key]: value } : current))
+  }
+  const saveDraft = () => {
+    if (!draft) return
+    onUpdate({
+      ...draft,
+      label: draft.label.trim() || 'Custom preset',
+      description: draft.description.trim() || 'Custom risk preset',
+    })
+    cancelEditing()
+  }
+  const cloneSelected = () => {
+    const base = selected ?? presets[0]
+    if (!base) return
+    onCreate({
+      ...base,
+      id: uniquePresetId(`${base.label} Copy`, presets),
+      label: `${base.label} Copy`,
+      description: base.description || 'Custom risk preset',
+    })
+  }
+
+  return (
+    <section className="rounded-lg border border-line bg-panel/82 p-4 shadow-terminal">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-[0.22em] text-muted">
+            Risk preset research desk
+          </p>
+          <h2 className="font-display text-lg font-semibold">Preset policies and expected risk</h2>
+          <p className="mt-1 max-w-3xl text-sm leading-6 text-muted">
+            Compare each sizing policy against the selected model. Custom rows are saved to the
+            local workstation preset file; trial metrics compute from saved evaluation rows when
+            a bundled result is not available.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={cloneSelected}
+          className="rounded border border-cyan/40 bg-cyan/10 px-3 py-2 font-mono text-[10px] font-semibold uppercase tracking-[0.14em] text-cyan transition hover:border-cyan"
+        >
+          Create preset
+        </button>
+      </div>
+      {error ? (
+        <div className="mb-3 rounded-md border border-amber/35 bg-amber/10 px-3 py-2 text-sm text-amber">
+          {error}
+        </div>
+      ) : null}
+      <div className="overflow-x-auto rounded-lg border border-line bg-background/45">
+        <table className="w-full min-w-[1180px] border-collapse text-left text-xs">
+          <thead className="border-b border-line bg-panelStrong/90 font-mono text-[9px] uppercase tracking-[0.16em] text-muted">
+            <tr>
+              <th className="px-3 py-2 font-medium">Preset</th>
+              <th className="px-3 py-2 font-medium">Policy</th>
+              <th className="px-3 py-2 text-right font-medium">Risk of ruin</th>
+              <th className="px-3 py-2 text-right font-medium">Return / mkt</th>
+              <th className="px-3 py-2 text-right font-medium">EV / 10</th>
+              <th className="px-3 py-2 text-right font-medium">Variance</th>
+              <th className="px-3 py-2 text-right font-medium">Trade %</th>
+              <th className="px-3 py-2 text-right font-medium">Markets</th>
+              <th className="px-3 py-2 text-right font-medium">Actions</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-line/70">
+            {presets.map((preset) => {
+              const trial = trialsByPresetId.get(preset.id)
+              const loading = loadingIds.has(preset.id)
+              const editing = editingId === preset.id && draft
+              return (
+                <tr
+                  key={preset.id}
+                  className={preset.id === selectedPresetId ? 'bg-cyan/5' : 'hover:bg-panelStrong/35'}
+                >
+                  <td className="max-w-[20rem] px-3 py-2">
+                    {editing ? (
+                      <div className="grid gap-2">
+                        <input
+                          value={draft.label}
+                          onChange={(event) => updateDraft('label', event.target.value)}
+                          className="h-8 rounded-md border border-line bg-background px-2 font-mono text-xs"
+                        />
+                        <input
+                          value={draft.description}
+                          onChange={(event) => updateDraft('description', event.target.value)}
+                          className="h-8 rounded-md border border-line bg-background px-2 text-xs"
+                        />
+                      </div>
+                    ) : (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onSelect(preset.id)}
+                          className="text-left font-mono text-xs font-semibold text-foreground transition hover:text-cyan"
+                        >
+                          {preset.label}
+                        </button>
+                        <p className="mt-1 line-clamp-2 text-xs leading-5 text-muted">{preset.description}</p>
+                      </>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    {editing ? (
+                      <div className="grid grid-cols-5 gap-2">
+                        <select
+                          value={draft.trade_side}
+                          onChange={(event) =>
+                            updateDraft('trade_side', event.target.value as RiskPreset['trade_side'])
+                          }
+                          className="h-8 rounded-md border border-line bg-background px-2 font-mono text-xs"
+                        >
+                          <option value="all">All</option>
+                          <option value="no_only">NO</option>
+                          <option value="yes_only">YES</option>
+                        </select>
+                        <PercentInput value={draft.min_margin} onChange={(value) => updateDraft('min_margin', value)} />
+                        <PercentInput value={draft.kelly_fraction} onChange={(value) => updateDraft('kelly_fraction', value)} />
+                        <PercentInput value={draft.max_position_fraction} onChange={(value) => updateDraft('max_position_fraction', value)} />
+                        <PercentInput value={draft.max_event_exposure_fraction} onChange={(value) => updateDraft('max_event_exposure_fraction', value)} />
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-5 gap-2 font-mono text-[10px] uppercase tracking-[0.1em] text-muted">
+                        <span>{preset.trade_side.replace('_', '-')}</span>
+                        <span>M {formatProbability(preset.min_margin)}</span>
+                        <span>K {formatProbability(preset.kelly_fraction)}</span>
+                        <span>P {formatProbability(preset.max_position_fraction)}</span>
+                        <span>E {formatProbability(preset.max_event_exposure_fraction)}</span>
+                      </div>
+                    )}
+                  </td>
+                  <RiskMetricCell value={loading ? 'Computing' : formatProbability(trial?.risk_of_ruin_estimate)} tone={ruinTone(trial)} />
+                  <RiskMetricCell value={loading ? 'Computing' : formatSigned(trial?.expected_return_per_market.expected)} />
+                  <RiskMetricCell value={loading ? 'Computing' : formatSigned(trial?.ev_per_10_markets)} />
+                  <RiskMetricCell value={loading ? 'Computing' : formatVariance(trial?.return_variance_per_market)} />
+                  <RiskMetricCell value={loading ? 'Computing' : formatProbability(trial?.trade_percent)} />
+                  <RiskMetricCell value={loading ? 'Computing' : formatInteger(trial?.market_count)} />
+                  <td className="px-3 py-2 text-right">
+                    {editing ? (
+                      <div className="flex justify-end gap-2">
+                        <button type="button" onClick={saveDraft} className="text-cyan hover:text-foreground">
+                          Save
+                        </button>
+                        <button type="button" onClick={cancelEditing} className="text-muted hover:text-foreground">
+                          Cancel
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex justify-end gap-2">
+                        <button type="button" onClick={() => startEditing(preset)} className="text-cyan hover:text-foreground">
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          disabled={presets.length <= 1}
+                          onClick={() => onDelete(preset.id)}
+                          className="text-red hover:text-foreground disabled:cursor-not-allowed disabled:text-muted"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+function PercentInput({
+  value,
+  onChange,
+}: {
+  readonly value: number
+  readonly onChange: (value: number) => void
+}) {
+  return (
+    <input
+      type="number"
+      min="0"
+      step="0.1"
+      value={toPercentInput(value)}
+      onChange={(event) => onChange(fromPercentInput(event.target.value))}
+      className="h-8 min-w-0 rounded-md border border-line bg-background px-2 text-right font-mono text-xs"
+    />
+  )
+}
+
+function RiskMetricCell({
+  value,
+  tone = 'text-foreground',
+}: {
+  readonly value: string
+  readonly tone?: string
+}) {
+  return <td className={`px-3 py-2 text-right font-mono text-xs font-semibold ${tone}`}>{value}</td>
+}
+
+function ruinTone(trial: RiskPresetTrial | undefined): string {
+  if (!trial) return 'text-muted'
+  if (trial.risk_of_ruin_estimate <= 0.01) return 'text-green'
+  if (trial.risk_of_ruin_estimate <= 0.05) return 'text-cyan'
+  if (trial.risk_of_ruin_estimate <= 0.15) return 'text-amber'
+  return 'text-red'
+}
+
+function formatVariance(value: number | null | undefined): string {
+  return typeof value === 'number' ? value.toFixed(6) : '--'
+}
+
+function uniquePresetId(label: string, presets: readonly RiskPreset[]): string {
+  const slug = label
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || 'custom-preset'
+  const existing = new Set(presets.map((preset) => preset.id))
+  let candidate = slug
+  let suffix = 2
+  while (existing.has(candidate)) {
+    candidate = `${slug}-${suffix}`
+    suffix += 1
+  }
+  return candidate
+}
+
+function toPercentInput(value: number): string {
+  return Number.isFinite(value) ? String(Number((value * 100).toFixed(3))) : '0'
+}
+
+function fromPercentInput(value: string): number {
+  const parsed = Number.parseFloat(value)
+  if (!Number.isFinite(parsed)) return 0
+  return parsed / 100
 }
 
 function trialValue(value: string, loading: boolean): string {

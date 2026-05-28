@@ -32,6 +32,35 @@ export async function listRiskPresets(): Promise<RiskPreset[]> {
   return payload.risk_presets
 }
 
+export async function createRiskPreset(riskPreset: RiskPreset): Promise<RiskPreset[]> {
+  const payload = await request<{ risk_presets: RiskPreset[] }>('/api/risk-presets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ risk_preset: riskPreset }),
+  })
+  return payload.risk_presets
+}
+
+export async function updateRiskPreset(riskPreset: RiskPreset): Promise<RiskPreset[]> {
+  const payload = await request<{ risk_presets: RiskPreset[] }>(
+    `/api/risk-presets/${encodeURIComponent(riskPreset.id)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ risk_preset: riskPreset }),
+    },
+  )
+  return payload.risk_presets
+}
+
+export async function deleteRiskPreset(presetId: string): Promise<RiskPreset[]> {
+  const payload = await request<{ risk_presets: RiskPreset[] }>(
+    `/api/risk-presets/${encodeURIComponent(presetId)}`,
+    { method: 'DELETE' },
+  )
+  return payload.risk_presets
+}
+
 export async function getAccountSummary(): Promise<AccountSummary> {
   const payload = await request<{ summary: AccountSummary }>('/api/account/summary')
   return payload.summary
@@ -111,11 +140,12 @@ export async function getLatestTrades(): Promise<PollPredictionRow[]> {
 export async function getCurrentMarkets(
   modelName: string,
   riskPreset: RiskPreset,
-  options: { readonly refreshMarkets?: boolean } = {},
+  options: { readonly refreshMarkets?: boolean; readonly forceModelRun?: boolean } = {},
 ): Promise<PollSnapshot> {
   const params = new URLSearchParams({
     risk_preset_id: riskPreset.id,
     refresh_markets: String(options.refreshMarkets ?? true),
+    force_model_run: String(options.forceModelRun ?? false),
   })
   const payload = await request<{ snapshot: PollSnapshot }>(
     `/api/models/${encodeURIComponent(modelName)}/current-markets?${params.toString()}`,
@@ -126,6 +156,21 @@ export async function getCurrentMarkets(
     },
   )
   return payload.snapshot
+}
+
+export function currentMarketsStreamUrl(modelName: string, riskPreset: RiskPreset): string {
+  const url = new URL(
+    `/api/models/${encodeURIComponent(modelName)}/current-markets/stream`,
+    API_BASE,
+  )
+  url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+  url.searchParams.set('risk_preset_id', riskPreset.id)
+  url.searchParams.set('risk_trade_side', riskPreset.trade_side)
+  url.searchParams.set('min_margin', String(riskPreset.min_margin))
+  url.searchParams.set('kelly_fraction', String(riskPreset.kelly_fraction))
+  url.searchParams.set('max_position_fraction', String(riskPreset.max_position_fraction))
+  url.searchParams.set('max_event_exposure_fraction', String(riskPreset.max_event_exposure_fraction))
+  return url.toString()
 }
 
 export async function getPollHistory(limit = 50): Promise<PollSnapshot[]> {

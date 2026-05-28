@@ -20,6 +20,8 @@ def test_build_transcript_discovery_prompt_asks_web_search_for_source_candidates
     assert "Do not rely on memory" in prompt
     assert "source_url" in prompt
     assert "transcript_candidate" in prompt
+    assert "call_duration_minutes" in prompt
+    assert "qa_question_count" in prompt
 
 
 def test_parse_transcript_discovery_response_keeps_structured_source_candidates():
@@ -34,6 +36,10 @@ def test_parse_transcript_discovery_response_keeps_structured_source_candidates(
                         "source_url": "https://example.com/cost-q1-transcript",
                         "source_name": "Example Transcript Source",
                         "published_at": "2025-03-07T12:00:00Z",
+                        "call_date": "2025-03-06T21:30:00Z",
+                        "call_duration_minutes": 61.0,
+                        "qa_question_count": 14,
+                        "prepared_remarks_minutes": 27.0,
                         "transcript_candidate": True,
                         "confidence": 0.9,
                         "rationale": (
@@ -57,6 +63,8 @@ def test_parse_transcript_discovery_response_keeps_structured_source_candidates(
 
     assert packet.company_name == "Costco"
     assert packet.candidates[0].source_url == "https://example.com/cost-q1-transcript"
+    assert packet.candidates[0].call_duration_minutes == 61.0
+    assert packet.candidates[0].qa_question_count == 14
     assert packet.candidates[0].transcript_candidate
     assert packet.transcript_candidates()[0].fiscal_period == "2025 Q1"
 
@@ -71,3 +79,6 @@ def test_build_openai_transcript_discovery_payload_uses_web_search_schema():
     assert payload["tools"] == [{"type": "web_search"}]
     assert payload["text"]["format"]["strict"] is True
     assert payload["text"]["format"]["schema"]["additionalProperties"] is False
+    candidate_schema = payload["text"]["format"]["schema"]["properties"]["candidates"]["items"]
+    assert "call_duration_minutes" in candidate_schema["properties"]
+    assert "qa_question_count" in candidate_schema["properties"]

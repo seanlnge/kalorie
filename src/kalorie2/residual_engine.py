@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from kalorie2.prediction_types import PredictionInputRow
+from kalorie2.prediction_types import PredictionInputRow, prediction_row_key
 
 
 class ResidualEngineModel(BaseModel):
@@ -13,6 +13,7 @@ class ResidualEngineModel(BaseModel):
 
 
 class ResidualPrediction(ResidualEngineModel):
+    row_key: str = ""
     market_ticker: str = ""
     event_ticker: str = ""
     probability: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
@@ -39,6 +40,7 @@ class LinearResidualModel(ResidualEngineModel):
         feature_values: dict[str, float],
         market_ticker: str = "",
         event_ticker: str = "",
+        row_key: str = "",
         training_event_tickers: list[str] | None = None,
     ) -> ResidualPrediction:
         residual_delta = self.intercept + sum(
@@ -51,6 +53,7 @@ class LinearResidualModel(ResidualEngineModel):
         side_probability = apply_residual(side_market_probability, residual_delta)
         probability = _yes_probability_from_side(side_probability, self.target_side)
         return ResidualPrediction(
+            row_key=row_key,
             market_ticker=market_ticker,
             event_ticker=event_ticker,
             probability=_decimal_probability(probability),
@@ -192,6 +195,7 @@ def walk_forward_predictions(
                         feature_values=feature_row,
                         market_ticker=row.market_ticker,
                         event_ticker=row.event_ticker,
+                        row_key=prediction_row_key(row),
                         training_event_tickers=list(prior_event_tickers),
                     )
                 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -9,10 +10,11 @@ from typing import Annotated, Literal
 
 import httpx
 import uvicorn
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
+from starlette.websockets import WebSocketDisconnect
 
 from kalorie2.kalshi_account import (
     KalshiAccountClient,
@@ -20,6 +22,7 @@ from kalorie2.kalshi_account import (
     build_open_positions_summary,
     load_env_file,
 )
+from kalorie2.kalshi_orderbook import KalshiOrderbookWebSocketClient, OrderbookQuote
 from kalorie2.market_poller import (
     ActiveMarketRow,
     CachedSavedModelMarketScorer,
@@ -32,8 +35,10 @@ from kalorie2.market_poller import (
 from kalorie2.risk_presets import (
     RiskPreset,
     apply_risk_preset_to_market,
+    delete_risk_preset,
     get_risk_preset,
-    list_risk_presets,
+    list_saved_risk_presets,
+    save_risk_preset,
 )
 from kalorie2.risk_trials import build_risk_preset_trials
 from kalorie2.saved_models import (
@@ -44,7 +49,7 @@ from kalorie2.saved_models import (
 )
 
 ExecutionMode = Literal["all", "no_only"]
-MARKET_POLL_INTERVAL_SECONDS = 60
+MARKET_POLL_INTERVAL_SECONDS = 60 * 60
 MODEL_RUN_INTERVAL_SECONDS = 60 * 60
 
 
@@ -55,6 +60,12 @@ class CurrentMarketsRiskRequest(BaseModel):
 
 
 class RiskTrialRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    risk_preset: RiskPreset
+
+
+class RiskPresetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     risk_preset: RiskPreset
@@ -88,10 +99,12 @@ def create_app(
     app.state.poll_cache_root = poll_cache_root or default_poll_cache_root()
     app.state.registry = SavedModelRegistry(models_root=app.state.models_root)
     app.state.poll_cache_store = MarketPollCacheStore(root=app.state.poll_cache_root)
+    app.state.risk_preset_store_path = app.state.models_root / "risk-presets.json"
     app.state.current_market_scorer = CachedSavedModelMarketScorer(
         models_root=app.state.models_root
     )
     app.state.current_market_prediction_cache: dict[str, CurrentMarketPredictionCacheEntry] = {}
+    app.state.orderbook_client_factory = KalshiOrderbookWebSocketClient
     app.state.risk_trial_cache: dict[str, dict] = {}
 
     @app.get("/api/models")
@@ -112,12 +125,43 @@ def create_app(
 
     @app.get("/api/risk-presets")
     def risk_presets() -> JSONResponse:
+        store_path: Path = app.state.risk_preset_store_path
         return JSONResponse(
             {
                 "risk_presets": [
-                    preset.model_dump(mode="json") for preset in list_risk_presets()
+                    preset.model_dump(mode="json")
+                    for preset in list_saved_risk_presets(store_path)
                 ]
             }
+        )
+
+    @app.post("/api/risk-presets")
+    def create_risk_preset(request: RiskPresetRequest) -> JSONResponse:
+        store_path: Path = app.state.risk_preset_store_path
+        presets = save_risk_preset(request.risk_preset, store_path)
+        return JSONResponse(
+            {"risk_presets": [preset.model_dump(mode="json") for preset in presets]}
+        )
+
+    @app.put("/api/risk-presets/{preset_id}")
+    def update_risk_preset(preset_id: str, request: RiskPresetRequest) -> JSONResponse:
+        if request.risk_preset.id != preset_id:
+            raise HTTPException(status_code=409, detail="Risk preset id does not match URL")
+        store_path: Path = app.state.risk_preset_store_path
+        presets = save_risk_preset(request.risk_preset, store_path)
+        return JSONResponse(
+            {"risk_presets": [preset.model_dump(mode="json") for preset in presets]}
+        )
+
+    @app.delete("/api/risk-presets/{preset_id}")
+    def remove_risk_preset(preset_id: str) -> JSONResponse:
+        store_path: Path = app.state.risk_preset_store_path
+        try:
+            presets = delete_risk_preset(preset_id, store_path)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return JSONResponse(
+            {"risk_presets": [preset.model_dump(mode="json") for preset in presets]}
         )
 
     @app.get("/api/account/summary")
@@ -282,7 +326,10 @@ def create_app(
             risk_preset = risk_request.risk_preset
         else:
             try:
-                risk_preset = get_risk_preset(risk_preset_id)
+                risk_preset = get_risk_preset(
+                    risk_preset_id,
+                    store_path=app.state.risk_preset_store_path,
+                )
             except KeyError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
         started_at = datetime.now(tz=UTC)
@@ -341,6 +388,121 @@ def create_app(
             trade_rows=trade_rows,
         )
         return JSONResponse({"snapshot": snapshot.model_dump(mode="json")})
+
+    @app.websocket("/api/models/{model_name}/current-markets/stream")
+    async def stream_current_markets(
+        websocket: WebSocket,
+        model_name: str,
+        risk_preset_id: str = "balanced",
+        risk_trade_side: str | None = None,
+        min_margin: float | None = None,
+        kelly_fraction: float | None = None,
+        max_position_fraction: float | None = None,
+        max_event_exposure_fraction: float | None = None,
+    ) -> None:
+        await websocket.accept()
+        try:
+            risk_preset = _stream_risk_preset(
+                risk_preset_id=risk_preset_id,
+                risk_trade_side=risk_trade_side,
+                min_margin=min_margin,
+                kelly_fraction=kelly_fraction,
+                max_position_fraction=max_position_fraction,
+                max_event_exposure_fraction=max_event_exposure_fraction,
+                store_path=app.state.risk_preset_store_path,
+            )
+        except (KeyError, ValueError) as exc:
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "status": "error",
+                    "message": str(exc),
+                }
+            )
+            await websocket.close()
+            return
+
+        cache_entry: CurrentMarketPredictionCacheEntry | None = (
+            app.state.current_market_prediction_cache.get(model_name)
+        )
+        if cache_entry is None:
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "status": "stale",
+                    "message": "Load current markets before opening the stream.",
+                }
+            )
+            await websocket.close()
+            return
+
+        market_tickers = sorted(
+            market.market_ticker
+            for market in cache_entry.markets
+            if market.market_ticker in cache_entry.rows_by_ticker
+        )
+        if not market_tickers:
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "status": "stale",
+                    "message": "No cached market tickers are available to stream.",
+                }
+            )
+            await websocket.close()
+            return
+
+        client_factory = app.state.orderbook_client_factory
+        try:
+            client_kwargs = _orderbook_client_kwargs(
+                client_factory=client_factory,
+                market_tickers=market_tickers,
+            )
+            orderbook_client = client_factory(**client_kwargs)
+        except Exception as exc:  # noqa: BLE001
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "status": "error",
+                    "message": f"Orderbook stream could not start: {exc}",
+                }
+            )
+            await websocket.close()
+            return
+
+        await websocket.send_json(
+            {
+                "type": "status",
+                "status": "subscribed",
+                "market_tickers": market_tickers,
+            }
+        )
+        try:
+            async for quote in orderbook_client.iter_quotes():
+                row = _row_for_orderbook_quote(
+                    cache_entry=cache_entry,
+                    quote=quote,
+                    risk_preset=risk_preset,
+                )
+                if row is None:
+                    continue
+                await websocket.send_json(
+                    {
+                        "type": "row_update",
+                        "row": row.model_dump(mode="json"),
+                    }
+                )
+        except WebSocketDisconnect:
+            return
+        except Exception as exc:  # noqa: BLE001
+            await websocket.send_json(
+                {
+                    "type": "status",
+                    "status": "error",
+                    "message": f"Orderbook stream failed: {exc}",
+                }
+            )
+            await websocket.close()
 
     return app
 
@@ -435,6 +597,88 @@ def _apply_risk_preset_to_poll_row(row, *, risk_preset: RiskPreset):
             "recommended_fraction": decision.recommended_fraction,
             "passes_risk_filter": decision.passes_filter,
         }
+    )
+
+
+def _row_for_orderbook_quote(
+    *,
+    cache_entry: CurrentMarketPredictionCacheEntry,
+    quote: OrderbookQuote,
+    risk_preset: RiskPreset,
+) -> PollPredictionRow | None:
+    cached_row = cache_entry.rows_by_ticker.get(quote.market_ticker)
+    if cached_row is None:
+        return None
+    market = next(
+        (market for market in cache_entry.markets if market.market_ticker == quote.market_ticker),
+        None,
+    )
+    if market is None:
+        return None
+    refreshed_market = market.model_copy(
+        update={
+            "yes_bid": quote.yes_bid,
+            "yes_ask": quote.yes_ask,
+            "yes_mid": quote.yes_mid,
+        }
+    )
+    cache_entry.markets = [
+        refreshed_market if existing.market_ticker == quote.market_ticker else existing
+        for existing in cache_entry.markets
+    ]
+    refreshed_row = _refresh_market_data(cached_row, refreshed_market)
+    return _apply_risk_preset_to_poll_row(refreshed_row, risk_preset=risk_preset)
+
+
+def _orderbook_client_kwargs(*, client_factory, market_tickers: list[str]) -> dict[str, object]:
+    kwargs: dict[str, object] = {"market_tickers": market_tickers}
+    if client_factory is not KalshiOrderbookWebSocketClient:
+        return kwargs
+    api_key_id = os.environ.get("KALSHI_API_KEY_ID") or os.environ.get("KALSHI_API_KEY")
+    private_key_path = os.environ.get("KALSHI_PRIVATE_KEY_PATH")
+    if not api_key_id or not private_key_path:
+        raise RuntimeError("Kalshi websocket auth is not configured")
+    kwargs.update(
+        {
+            "api_key_id": api_key_id,
+            "private_key_path": Path(private_key_path),
+        }
+    )
+    return kwargs
+
+
+def _stream_risk_preset(
+    *,
+    risk_preset_id: str,
+    risk_trade_side: str | None,
+    min_margin: float | None,
+    kelly_fraction: float | None,
+    max_position_fraction: float | None,
+    max_event_exposure_fraction: float | None,
+    store_path: Path,
+) -> RiskPreset:
+    custom_values = [
+        risk_trade_side,
+        min_margin,
+        kelly_fraction,
+        max_position_fraction,
+        max_event_exposure_fraction,
+    ]
+    if all(value is None for value in custom_values):
+        return get_risk_preset(risk_preset_id, store_path=store_path)
+    if any(value is None for value in custom_values):
+        raise ValueError("Custom stream risk preset query parameters are incomplete")
+    if risk_trade_side not in {"all", "no_only", "yes_only"}:
+        raise ValueError(f"Invalid risk trade side: {risk_trade_side}")
+    return RiskPreset(
+        id=risk_preset_id,
+        label=risk_preset_id,
+        description="Current Markets stream risk preset",
+        trade_side=risk_trade_side,
+        min_margin=min_margin,
+        kelly_fraction=kelly_fraction,
+        max_position_fraction=max_position_fraction,
+        max_event_exposure_fraction=max_event_exposure_fraction,
     )
 
 

@@ -18,12 +18,14 @@ export interface ModelPickerDropdownProps {
   readonly models: readonly SavedModelMetadata[]
   readonly selectedModelName: string | null
   readonly onSelect: (modelName: string) => void
+  readonly compact?: boolean
 }
 
 export function ModelPickerDropdown({
   models,
   selectedModelName,
   onSelect,
+  compact = false,
 }: ModelPickerDropdownProps) {
   const [open, setOpen] = useState(false)
   const selected = models.find((model) => model.name === selectedModelName) ?? models[0] ?? null
@@ -31,7 +33,7 @@ export function ModelPickerDropdown({
 
   return (
     <div className="min-w-0">
-      <span className="mb-1 block font-mono text-[10px] uppercase tracking-[0.2em] text-muted">
+      <span className={compact ? 'sr-only' : 'mb-1 block font-mono text-[10px] uppercase tracking-[0.2em] text-muted'}>
         Model
       </span>
       <Popover open={open} onOpenChange={setOpen}>
@@ -41,7 +43,10 @@ export function ModelPickerDropdown({
             variant="outline"
             role="combobox"
             aria-expanded={open}
-            className="h-12 w-full justify-between rounded-md border-line bg-background px-3 text-left normal-case tracking-normal"
+            className={[
+              'w-full justify-between rounded-md border-line bg-background px-3 text-left normal-case tracking-normal',
+              compact ? 'h-9 min-w-[12rem]' : 'h-12',
+            ].join(' ')}
           >
             <span className="truncate font-mono text-sm font-semibold">
               {selected?.name ?? 'Select model'}
@@ -79,12 +84,14 @@ export function ModelPickerDropdown({
           </Command>
         </PopoverContent>
       </Popover>
-      <div className="mt-2 grid grid-cols-4 overflow-hidden rounded-md border border-line bg-panel/80">
-        <PreviewCell label="Brier" value={preview?.brier?.toFixed(4) ?? '--'} />
-        <PreviewCell label="Market" value={preview?.market_brier?.toFixed(4) ?? '--'} />
-        <PreviewCell label="ECE" value={preview?.ece?.toFixed(4) ?? '--'} />
-        <PreviewCell label="Log loss" value={preview?.log_loss?.toFixed(4) ?? '--'} />
-      </div>
+      {compact ? null : (
+        <div className="mt-2 grid grid-cols-4 overflow-hidden rounded-md border border-line bg-panel/80">
+          <PreviewCell label="Brier" value={preview?.brier?.toFixed(4) ?? '--'} />
+          <PreviewCell label="Market" value={preview?.market_brier?.toFixed(4) ?? '--'} />
+          <PreviewCell label="ECE" value={preview?.ece?.toFixed(4) ?? '--'} />
+          <PreviewCell label="Log loss" value={preview?.log_loss?.toFixed(4) ?? '--'} />
+        </div>
+      )}
     </div>
   )
 }

@@ -15,6 +15,7 @@ dependencies = [
     "python-multipart>=0.0.18",
     "typer>=0.12",
     "uvicorn>=0.31",
+    "websockets>=15,<15.1",
 ]
 
 [project.optional-dependencies]

@@ -200,6 +200,18 @@ def test_build_risk_preset_trials_exports_expected_return_percentile_bands() -> 
     assert trial.risk_preset_id == "balanced"
     assert trial.trade_percent > 0
     assert trial.ev_per_10_markets > 0
+    assert trial.return_variance_per_market >= 0
+    assert trial.roi_projection[0].market_count == 0
+    assert trial.roi_projection[0].roi.expected == 0
+    assert trial.roi_projection[-1].market_count == len(rows)
+    assert all(
+        left.market_count < right.market_count
+        for left, right in zip(trial.roi_projection, trial.roi_projection[1:])
+    )
+    assert all(point.roi.p10 <= point.roi.expected <= point.roi.p90 for point in trial.roi_projection)
+    assert trial.roi_paths
+    assert all(path[0].market_count == 0 and path[0].roi == 0 for path in trial.roi_paths)
+    assert all(path[-1].market_count == len(rows) for path in trial.roi_paths)
     assert trial.expected_return_per_market.p10 <= trial.expected_return_per_market.expected
     assert trial.expected_return_per_market.p25 <= trial.expected_return_per_market.p75
     assert trial.expected_return_per_market.p90 >= trial.expected_return_per_market.expected

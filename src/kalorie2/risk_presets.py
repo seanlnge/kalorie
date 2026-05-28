@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -72,12 +74,86 @@ def list_risk_presets() -> list[RiskPreset]:
     return list(BUILT_IN_RISK_PRESETS)
 
 
-def get_risk_preset(preset_id: str | None) -> RiskPreset:
+def list_saved_risk_presets(store_path: Path) -> list[RiskPreset]:
+    stored = _read_store(store_path)
+    deleted_builtin_ids = set(stored["deleted_builtin_ids"])
+    by_id = {
+        preset.id: preset
+        for preset in BUILT_IN_RISK_PRESETS
+        if preset.id not in deleted_builtin_ids
+    }
+    for preset in stored["presets"]:
+        by_id[preset.id] = preset
+    return list(by_id.values())
+
+
+def save_risk_preset(preset: RiskPreset, store_path: Path) -> list[RiskPreset]:
+    stored = _read_store(store_path)
+    presets_by_id = {entry.id: entry for entry in stored["presets"]}
+    presets_by_id[preset.id] = preset
+    deleted_builtin_ids = set(stored["deleted_builtin_ids"])
+    deleted_builtin_ids.discard(preset.id)
+    _write_store(
+        store_path,
+        presets=list(presets_by_id.values()),
+        deleted_builtin_ids=sorted(deleted_builtin_ids),
+    )
+    return list_saved_risk_presets(store_path)
+
+
+def delete_risk_preset(preset_id: str, store_path: Path) -> list[RiskPreset]:
+    current = list_saved_risk_presets(store_path)
+    if len(current) <= 1:
+        raise ValueError("At least one risk preset must remain")
+    stored = _read_store(store_path)
+    presets = [preset for preset in stored["presets"] if preset.id != preset_id]
+    deleted_builtin_ids = set(stored["deleted_builtin_ids"])
+    if preset_id in {preset.id for preset in BUILT_IN_RISK_PRESETS}:
+        deleted_builtin_ids.add(preset_id)
+    _write_store(
+        store_path,
+        presets=presets,
+        deleted_builtin_ids=sorted(deleted_builtin_ids),
+    )
+    return list_saved_risk_presets(store_path)
+
+
+def get_risk_preset(preset_id: str | None, store_path: Path | None = None) -> RiskPreset:
     normalized_id = preset_id or "balanced"
-    for preset in BUILT_IN_RISK_PRESETS:
+    presets = list_saved_risk_presets(store_path) if store_path else list_risk_presets()
+    for preset in presets:
         if preset.id == normalized_id:
             return preset
     raise KeyError(f"Unknown risk preset: {normalized_id}")
+
+
+def _read_store(store_path: Path) -> dict[str, list]:
+    if not store_path.exists():
+        return {"presets": [], "deleted_builtin_ids": []}
+    payload = json.loads(store_path.read_text(encoding="utf-8"))
+    presets = [RiskPreset.model_validate(entry) for entry in payload.get("presets", [])]
+    deleted_builtin_ids = [
+        str(entry)
+        for entry in payload.get("deleted_builtin_ids", [])
+        if isinstance(entry, str)
+    ]
+    return {"presets": presets, "deleted_builtin_ids": deleted_builtin_ids}
+
+
+def _write_store(
+    store_path: Path,
+    *,
+    presets: list[RiskPreset],
+    deleted_builtin_ids: list[str],
+) -> None:
+    store_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "presets": [preset.model_dump(mode="json") for preset in presets],
+        "deleted_builtin_ids": deleted_builtin_ids,
+    }
+    temp_path = store_path.with_suffix(f"{store_path.suffix}.tmp")
+    temp_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    temp_path.replace(store_path)
 
 
 def apply_risk_preset_to_market(

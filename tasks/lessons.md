@@ -53,3 +53,11 @@ For live earnings-mention cards, hydrate `/events/{event_ticker}` and prefer the
 ## 2026-05-27: Kalshi authenticated requests need signing credentials
 
 Do not treat a Kalshi API key ID by itself as sufficient for authenticated trading API requests. Kalshi authenticated requests require `KALSHI-ACCESS-KEY`, `KALSHI-ACCESS-TIMESTAMP`, and `KALSHI-ACCESS-SIGNATURE`; the signature is produced with the private key over timestamp + method + path. Public market data can stay unauthenticated, but portfolio/balance endpoints need the key ID plus private key material/path.
+
+## 2026-05-28: Fix charts with real data series, not relabeled sketches
+
+When the user asks for a chart with specific axes, verify the available data actually supports those axes before changing labels. If it does not, extend the data contract and tests first; do not approximate a 2D Monte Carlo or time/market-count chart from a single scalar percentile band.
+
+## 2026-05-28: Persist workstation edits at the backend boundary
+
+When a UI lets users create, rename, edit, or delete domain objects, wire those actions through an explicit persistence API before calling the feature done. React state is acceptable for draft editing, but saved presets should round-trip through local files and survive a backend/app restart.

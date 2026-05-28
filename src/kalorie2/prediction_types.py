@@ -30,6 +30,16 @@ class PredictionInputRow(HistoricalMentionMarketRow):
         return self.model_dump(exclude=_LABEL_ONLY_FIELDS)
 
 
+def prediction_row_key(row: PredictionInputRow) -> str:
+    return "|".join(
+        [
+            row.event_ticker,
+            row.market_ticker,
+            row.snapshot_target_time.isoformat(),
+        ]
+    )
+
+
 class MarketSnapshotFeatures(PredictionEngineModel):
     yes_bid: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     yes_ask: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))

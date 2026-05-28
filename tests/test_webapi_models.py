@@ -3,8 +3,10 @@ import json
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+from kalorie2.kalshi_orderbook import OrderbookQuote
 from kalorie2.market_poller import (
     ActiveMarketRow,
     MarketPollCacheStore,
@@ -181,6 +183,41 @@ def test_risk_presets_endpoint_returns_available_policy_overlays(tmp_path: Path)
     assert presets[1]["min_margin"] > 0
 
 
+def test_risk_preset_crud_persists_custom_presets_to_local_file(tmp_path: Path) -> None:
+    client = TestClient(create_app(models_root=tmp_path, env_path=tmp_path / ".env.missing"))
+    preset = {
+        "id": "custom-risk",
+        "label": "Custom Risk",
+        "description": "saved locally",
+        "trade_side": "all",
+        "min_margin": 0.03,
+        "kelly_fraction": 0.4,
+        "max_position_fraction": 0.04,
+        "max_event_exposure_fraction": 0.11,
+    }
+
+    create_response = client.post("/api/risk-presets", json={"risk_preset": preset})
+    assert create_response.status_code == 200
+    assert (tmp_path / "risk-presets.json").exists()
+    assert any(entry["id"] == "custom-risk" for entry in create_response.json()["risk_presets"])
+
+    updated = {**preset, "label": "Renamed Risk", "min_margin": 0.05}
+    update_response = client.put("/api/risk-presets/custom-risk", json={"risk_preset": updated})
+    assert update_response.status_code == 200
+    assert any(
+        entry["id"] == "custom-risk" and entry["label"] == "Renamed Risk"
+        for entry in update_response.json()["risk_presets"]
+    )
+
+    second_client = TestClient(create_app(models_root=tmp_path, env_path=tmp_path / ".env.missing"))
+    persisted = second_client.get("/api/risk-presets").json()["risk_presets"]
+    assert any(entry["id"] == "custom-risk" and entry["min_margin"] == 0.05 for entry in persisted)
+
+    delete_response = second_client.delete("/api/risk-presets/custom-risk")
+    assert delete_response.status_code == 200
+    assert all(entry["id"] != "custom-risk" for entry in delete_response.json()["risk_presets"])
+
+
 def test_custom_risk_trial_endpoint_computes_metrics_from_saved_rows(tmp_path: Path) -> None:
     _write_risk_trial_bundle(tmp_path)
     client = TestClient(create_app(models_root=tmp_path))
@@ -209,6 +246,17 @@ def test_custom_risk_trial_endpoint_computes_metrics_from_saved_rows(tmp_path: P
     assert trial["trade_percent"] == 2 / 3
     assert trial["ev_per_10_markets"] > 0
     assert trial["risk_of_ruin_estimate"] >= 0
+    assert trial["return_variance_per_market"] >= 0
+    assert trial["roi_projection"][0]["market_count"] == 0
+    assert trial["roi_projection"][0]["roi"]["expected"] == 0
+    assert trial["roi_projection"][-1]["market_count"] == trial["market_count"]
+    assert all(
+        left["market_count"] < right["market_count"]
+        for left, right in zip(trial["roi_projection"], trial["roi_projection"][1:])
+    )
+    assert trial["roi_paths"]
+    assert all(path[0]["market_count"] == 0 and path[0]["roi"] == 0 for path in trial["roi_paths"])
+    assert all(path[-1]["market_count"] == trial["market_count"] for path in trial["roi_paths"])
     assert trial["expected_return_per_market"]["expected"] > 0
 
 
@@ -795,6 +843,102 @@ def test_current_markets_can_reapply_risk_without_refetching_kalshi_markets(
     assert second_response.status_code == 200
     assert FakeActiveMarketSource.calls == 1
     assert FakeScorer.calls == 1
+
+
+def test_current_markets_stream_reprices_rows_from_orderbook_quotes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    _write_api_bundle(tmp_path, side="NO")
+
+    class FakeActiveMarketSource:
+        def __init__(self, **_: object) -> None:
+            pass
+
+        def list_active_markets(self) -> list[ActiveMarketRow]:
+            return [
+                ActiveMarketRow(
+                    market_ticker="MARKET-1",
+                    event_ticker="EVENT-1",
+                    series_ticker="KXEARNINGSMENTIONTEST",
+                    event_title="Event",
+                    market_title="Market",
+                    target_phrase="AI",
+                    yes_bid=0.42,
+                    yes_ask=0.45,
+                    yes_mid=0.435,
+                    volume=100,
+                )
+            ]
+
+    class FakeScorer:
+        def __init__(self, *, models_root: Path) -> None:
+            self.models_root = models_root
+
+        def score_active_markets(
+            self, markets: list[ActiveMarketRow], *, model_name: str
+        ) -> list[PollPredictionRow]:
+            market = markets[0]
+            return [
+                PollPredictionRow(
+                    market_ticker=market.market_ticker,
+                    event_ticker=market.event_ticker,
+                    target_phrase=market.target_phrase,
+                    model_name=model_name,
+                    model_probability=0.25,
+                    market_probability=market.yes_mid,
+                    yes_bid=market.yes_bid,
+                    yes_ask=market.yes_ask,
+                    residual_delta=-0.185,
+                    side="NO",
+                    edge=0.17,
+                    cost=0.58,
+                    volume=market.volume,
+                )
+            ]
+
+    class FakeOrderbookClient:
+        def __init__(self, **kwargs: object) -> None:
+            self.market_tickers = kwargs["market_tickers"]
+
+        async def iter_quotes(self):
+            yield OrderbookQuote(
+                market_ticker="MARKET-1",
+                yes_bid=0.52,
+                yes_ask=0.56,
+                yes_mid=0.54,
+            )
+
+    monkeypatch.setattr("kalorie2.webapi.main.KalshiActiveMarketSource", FakeActiveMarketSource)
+    monkeypatch.setattr("kalorie2.webapi.main.CachedSavedModelMarketScorer", FakeScorer)
+    app = create_app(models_root=tmp_path)
+    app.state.orderbook_client_factory = FakeOrderbookClient
+    client = TestClient(app)
+
+    seed_response = client.post("/api/models/unit-model/current-markets?risk_preset_id=balanced")
+    assert seed_response.status_code == 200
+
+    with client.websocket_connect(
+        "/api/models/unit-model/current-markets/stream?risk_preset_id=balanced"
+    ) as websocket:
+        status = websocket.receive_json()
+        update = websocket.receive_json()
+
+    assert status == {
+        "type": "status",
+        "status": "subscribed",
+        "market_tickers": ["MARKET-1"],
+    }
+    assert update["type"] == "row_update"
+    row = update["row"]
+    assert row["market_ticker"] == "MARKET-1"
+    assert row["yes_bid"] == 0.52
+    assert row["yes_ask"] == 0.56
+    assert row["market_probability"] == 0.54
+    assert row["residual_delta"] == pytest.approx(-0.29)
+    assert row["side"] == "NO"
+    assert row["cost"] == 0.48
+    assert row["recommended_fraction"] > 0
 
 
 def _write_poll_snapshot(

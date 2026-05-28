@@ -36,8 +36,22 @@ def _row(**overrides) -> PredictionInputRow:
         "preclose_yes_mid": Decimal("0.96"),
         "candle_end_ts": 1779349020,
         "snapshot_staleness_seconds": 290,
+        "preclose_volume": 1200,
+        "preclose_open_interest": 300,
+        "preclose_yes_bid_size": 50,
+        "preclose_yes_ask_size": 70,
         "settlement_ts": None,
         "source": "kalshi_search_series",
+        "company_prior_call_count": 2,
+        "company_avg_call_duration_minutes_prior": 60.0,
+        "company_avg_qa_question_count_prior": 10.0,
+        "company_avg_prepared_remarks_minutes_prior": 24.0,
+        "company_qa_share_prior": 0.6,
+        "company_question_count_trend_prior": 2.0,
+        "company_transcript_coverage_count": 2,
+        "company_transcript_style_available": 1,
+        "company_avg_transcript_word_count_prior": 1250.0,
+        "company_avg_phrase_mentions_prior": 1.5,
     }
     payload.update(overrides)
     return PredictionInputRow.model_validate(payload)
@@ -96,11 +110,37 @@ def test_extract_market_features_includes_logit_spread_and_staleness():
     assert features["market_spread"] == pytest.approx(0.02)
     assert features["market_mid_logit"] == pytest.approx(3.178054, abs=0.000001)
     assert features["snapshot_staleness_hours"] == pytest.approx(290 / 3600)
+    assert features["hours_before_close"] == 8.0
+    assert features["log_hours_before_close"] == pytest.approx(2.197224, abs=0.000001)
+    assert features["hours_before_close_bucket_6_12"] == 1.0
+    assert features["hours_before_close_bucket_2_6"] == 0.0
+    assert features["hours_before_close_bucket_12_24"] == 0.0
+    assert features["hours_before_close_bucket_24_48"] == 0.0
+    assert features["company_prior_call_count"] == 2.0
+    assert features["company_avg_call_duration_minutes_prior"] == 60.0
+    assert features["company_avg_qa_question_count_prior"] == 10.0
+    assert features["company_avg_prepared_remarks_minutes_prior"] == 24.0
+    assert features["company_qa_share_prior"] == 0.6
+    assert features["company_question_count_trend_prior"] == 2.0
+    assert features["company_transcript_coverage_count"] == 2.0
+    assert features["company_transcript_style_available"] == 1.0
+    assert features["company_transcript_style_missing"] == 0.0
+    assert features["company_avg_transcript_word_count_prior"] == 1250.0
+    assert features["company_avg_phrase_mentions_prior"] == 1.5
     assert features["market_bid_present"] == 1.0
     assert features["market_ask_present"] == 1.0
     assert features["market_spread_share_of_mid"] == pytest.approx(0.02 / 0.96)
     assert features["market_no_bid"] == pytest.approx(0.03)
     assert features["market_no_ask"] == pytest.approx(0.05)
+    assert features["market_preclose_volume"] == 1200.0
+    assert features["market_preclose_volume_present"] == 1.0
+    assert features["market_preclose_open_interest"] == 300.0
+    assert features["market_preclose_open_interest_present"] == 1.0
+    assert features["market_preclose_volume_log"] == pytest.approx(7.09091, abs=0.00001)
+    assert features["market_preclose_open_interest_log"] == pytest.approx(5.70711, abs=0.00001)
+    assert features["market_preclose_yes_bid_size"] == 50.0
+    assert features["market_preclose_yes_ask_size"] == 70.0
+    assert features["market_preclose_size_imbalance"] == pytest.approx((50 - 70) / 120)
     assert "final_outcome" not in features
 
 
@@ -139,6 +179,8 @@ def test_extract_phrase_features_adds_semantic_bucket_scores():
 
     assert tariff_features["phrase_semantic_macro_score"] > 0.75
     assert tariff_features["phrase_semantic_regulatory_score"] > 0.75
+    assert tariff_features["phrase_semantic_embedding_available"] == 1.0
+    assert tariff_features["phrase_semantic_axis_risk_opportunity"] > 0.0
     assert tariff_features["phrase_semantic_operations_score"] < 0.5
     assert membership_features["phrase_semantic_operations_score"] > 0.5
     assert membership_features["phrase_semantic_macro_score"] < 0.5
@@ -203,3 +245,6 @@ def test_build_feature_row_and_matrix_exclude_label_fields():
     assert feature_row["resolution_option_count"] == 1.0
     assert feature_row["scenario_available"] == 1.0
     assert feature_row["web_evidence_available"] == 1.0
+    assert feature_row["company_metadata_available"] == 1.0
+    assert feature_row["company_sector_industrials"] == 1.0
+    assert feature_row["company_market_cap_large"] == 1.0

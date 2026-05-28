@@ -62,6 +62,16 @@ export interface ReturnPercentileBand {
   p90: number
 }
 
+export interface RiskReturnProjectionPoint {
+  market_count: number
+  roi: ReturnPercentileBand
+}
+
+export interface RiskReturnPathPoint {
+  market_count: number
+  roi: number
+}
+
 export interface RiskPresetTrial {
   risk_preset_id: string
   label: string
@@ -76,7 +86,10 @@ export interface RiskPresetTrial {
   market_count: number
   trade_percent: number
   ev_per_10_markets: number
+  return_variance_per_market?: number
   expected_return_per_market: ReturnPercentileBand
+  roi_projection?: RiskReturnProjectionPoint[]
+  roi_paths?: RiskReturnPathPoint[][]
 }
 
 export interface ModelCardPreview {
@@ -192,6 +205,20 @@ export interface PollSnapshot {
   prediction_rows: PollPredictionRow[]
   trade_rows: PollPredictionRow[]
 }
+
+export type CurrentMarketsStreamStatus = 'idle' | 'connecting' | 'live' | 'stale' | 'error'
+
+export type CurrentMarketsStreamMessage =
+  | {
+      type: 'status'
+      status: 'subscribed' | 'stale' | 'error'
+      message?: string
+      market_tickers?: string[]
+    }
+  | {
+      type: 'row_update'
+      row: PollPredictionRow
+    }
 
 export interface AccountSummary {
   available: boolean

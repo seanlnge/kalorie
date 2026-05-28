@@ -5,6 +5,10 @@
 *.pem
 *.key
 data/
+!data/
+data/*
+!data/company_metadata.json
+!data/phrase_semantic_embeddings.json
 artifacts/
 /artifacts-*.json
 .kalorie-cache/

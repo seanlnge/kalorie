@@ -231,6 +231,7 @@ def test_build_web_evidence_prompt_includes_cutoff_and_warns_against_leakage():
     assert "published before or at the cutoff" in prompt
     assert "Do not use earnings-call transcripts" in prompt
     assert "relevance_score" in prompt
+    assert "source_type" in prompt
     assert "Only include sources worth using as forecasting evidence" in prompt
     assert "tariff" in prompt
 
@@ -249,6 +250,13 @@ def test_build_openai_web_search_payload_uses_responses_web_search_and_strict_sc
     item_schema = payload["text"]["format"]["schema"]["properties"]["items"]["items"]
     assert "relevance_score" in item_schema["properties"]
     assert "evidence_direction" in item_schema["properties"]
+    assert item_schema["properties"]["source_type"]["enum"] == [
+        "company",
+        "sec",
+        "news",
+        "analyst",
+        "other",
+    ]
 
 
 def test_web_evidence_item_rejects_strength_outside_probability_range():

@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import os
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -23,6 +24,7 @@ from kalorie2.prediction_types import (
     ArtifactRetentionPolicy,
     PredictionInputRow,
     PredictionRunConfig,
+    prediction_row_key,
 )
 from kalorie2.residual_engine import ResidualPrediction, walk_forward_predictions
 from kalorie2.web_evidence import (
@@ -514,13 +516,7 @@ def sweep_command(
                                                 "backtest": _summarize_trades(trades),
                                             }
                                         )
-    results = sorted(
-        results,
-        key=lambda row: (
-            -row["backtest"]["roi_on_cost"],
-            row["evaluation"]["brier_score"] or 1.0,
-        ),
-    )
+    results = _rank_sweep_results(results)
     _write_json_checked(
         out_dir / "sweep-summary.json",
         {"run_id": run_id, "results": results},
@@ -900,6 +896,7 @@ def _write_predictions_csv_checked(
     checked_path = config.validate_output_path(path, artifact_kind="predictions")
     checked_path.parent.mkdir(parents=True, exist_ok=True)
     fieldnames = [
+        "row_key",
         "market_ticker",
         "event_ticker",
         "probability",
@@ -914,6 +911,7 @@ def _write_predictions_csv_checked(
         for prediction in predictions:
             writer.writerow(
                 {
+                    "row_key": prediction.row_key,
                     "market_ticker": prediction.market_ticker,
                     "event_ticker": prediction.event_ticker,
                     "probability": str(prediction.probability),
@@ -969,8 +967,12 @@ def _write_sweep_csv_checked(
         "margin",
         "trade_side",
         "prediction_count",
+        "log_loss",
+        "market_log_loss",
         "brier_score",
         "market_brier_score",
+        "ece",
+        "market_ece",
         "trades",
         "total_cost",
         "total_pnl",
@@ -993,18 +995,31 @@ def _summarize_predictions(
     rows: list[PredictionInputRow],
     predictions: list[ResidualPrediction],
 ) -> dict:
+    rows_by_key = {prediction_row_key(row): row for row in rows}
     rows_by_ticker = {row.market_ticker: row for row in rows}
     prediction_rows = [
-        (prediction, rows_by_ticker[prediction.market_ticker])
+        (prediction, row)
         for prediction in predictions
-        if prediction.market_ticker in rows_by_ticker
+        if (row := _row_for_prediction(prediction, rows_by_key, rows_by_ticker)) is not None
     ]
     if not prediction_rows:
         return {
             "prediction_count": 0,
             "brier_score": None,
             "market_brier_score": None,
+            "log_loss": None,
+            "market_log_loss": None,
+            "ece": None,
+            "market_ece": None,
         }
+    model_pairs = [
+        (float(prediction.probability), row.outcome_label)
+        for prediction, row in prediction_rows
+    ]
+    market_pairs = [
+        (float(row.preclose_yes_mid), row.outcome_label)
+        for _, row in prediction_rows
+    ]
     return {
         "prediction_count": len(prediction_rows),
         "brier_score": _mean(
@@ -1015,6 +1030,10 @@ def _summarize_predictions(
             (float(row.preclose_yes_mid) - row.outcome_label) ** 2
             for _, row in prediction_rows
         ),
+        "log_loss": _log_loss(model_pairs),
+        "market_log_loss": _log_loss(market_pairs),
+        "ece": _expected_calibration_error(model_pairs),
+        "market_ece": _expected_calibration_error(market_pairs),
     }
 
 
@@ -1027,10 +1046,11 @@ def _build_trades(
 ) -> list[dict]:
     if trade_side not in {"all", "no_only", "yes_only"}:
         raise ValueError("trade side must be all, no_only, or yes_only")
+    rows_by_key = {prediction_row_key(row): row for row in rows}
     rows_by_ticker = {row.market_ticker: row for row in rows}
     trades = []
     for prediction in predictions:
-        row = rows_by_ticker.get(prediction.market_ticker)
+        row = _row_for_prediction(prediction, rows_by_key, rows_by_ticker)
         if row is None:
             continue
         probability = float(prediction.probability)
@@ -1067,6 +1087,18 @@ def _build_trades(
     return trades
 
 
+def _row_for_prediction(
+    prediction: ResidualPrediction,
+    rows_by_key: dict[str, PredictionInputRow],
+    rows_by_ticker: dict[str, PredictionInputRow],
+) -> PredictionInputRow | None:
+    if prediction.row_key:
+        row = rows_by_key.get(prediction.row_key)
+        if row is not None:
+            return row
+    return rows_by_ticker.get(prediction.market_ticker)
+
+
 def _summarize_trades(trades: list[dict]) -> dict:
     total_cost = sum(trade["cost"] for trade in trades)
     total_pnl = sum(trade["pnl"] for trade in trades)
@@ -1078,9 +1110,59 @@ def _summarize_trades(trades: list[dict]) -> dict:
     }
 
 
+def _rank_sweep_results(results: list[dict]) -> list[dict]:
+    return sorted(
+        results,
+        key=lambda row: (
+            _missing_last(row["evaluation"].get("log_loss")),
+            _missing_last(row["evaluation"].get("brier_score")),
+            _missing_last(row["evaluation"].get("ece")),
+            -row["backtest"]["roi_on_cost"],
+        ),
+    )
+
+
 def _mean(values) -> float:
     collected = list(values)
     return round(sum(collected) / len(collected), 6)
+
+
+def _log_loss(probability_outcomes: list[tuple[float, int]]) -> float:
+    losses = []
+    for probability, outcome in probability_outcomes:
+        clipped = min(0.999999, max(0.000001, probability))
+        losses.append(
+            -(outcome * math.log(clipped) + (1 - outcome) * math.log(1.0 - clipped))
+        )
+    return _mean(losses)
+
+
+def _expected_calibration_error(
+    probability_outcomes: list[tuple[float, int]],
+    *,
+    bin_count: int = 10,
+) -> float:
+    weighted_gap = 0.0
+    for bin_index in range(bin_count):
+        low = bin_index / bin_count
+        high = (bin_index + 1) / bin_count
+        bucket = [
+            (probability, outcome)
+            for probability, outcome in probability_outcomes
+            if low <= probability < high or (bin_index == bin_count - 1 and probability == 1.0)
+        ]
+        if not bucket:
+            continue
+        average_probability = sum(probability for probability, _ in bucket) / len(bucket)
+        outcome_rate = sum(outcome for _, outcome in bucket) / len(bucket)
+        weighted_gap += (len(bucket) / len(probability_outcomes)) * abs(
+            average_probability - outcome_rate
+        )
+    return round(weighted_gap, 6)
+
+
+def _missing_last(value: float | None) -> float:
+    return float("inf") if value is None else value
 
 
 def _parse_float_grid(value: str) -> list[float]:

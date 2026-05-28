@@ -23,7 +23,7 @@ export function useRiskPresetTrial(
     const currentRequest = requestId.current
     setError(null)
     setComputedTrial(null)
-    if (!model || !riskPreset || bundledTrial) {
+    if (!model || !riskPreset || (bundledTrial && isCompleteTrial(bundledTrial))) {
       setLoading(false)
       return
     }
@@ -47,9 +47,17 @@ export function useRiskPresetTrial(
   }, [bundledTrial, model, riskPreset])
 
   return {
-    trial: bundledTrial ?? computedTrial,
-    bundled: Boolean(bundledTrial),
+    trial: bundledTrial && isCompleteTrial(bundledTrial) ? bundledTrial : computedTrial ?? bundledTrial,
+    bundled: Boolean(bundledTrial && isCompleteTrial(bundledTrial)),
     loading,
     error,
   } as const
+}
+
+function isCompleteTrial(trial: RiskPresetTrial): boolean {
+  return (
+    trial.return_variance_per_market !== undefined &&
+    Boolean(trial.roi_projection?.length) &&
+    Boolean(trial.roi_paths?.length)
+  )
 }

@@ -9,6 +9,12 @@ from typing import Annotated
 
 import typer
 
+from kalorie2.call_structure import (
+    CallStructureRecord,
+    extract_call_structure,
+    summarize_prior_call_structure,
+)
+
 app = typer.Typer(help="Build transcript-history probability features for earnings mentions.")
 
 _TRANSCRIPT_RE = re.compile(
@@ -29,6 +35,7 @@ class TranscriptRecord:
     fiscal_year: int
     fiscal_quarter: int
     estimated_available_at: datetime
+    published_at: datetime | None
     text: str
 
 
@@ -241,6 +248,19 @@ def _predict_row(
         for record in prior_transcripts
         if transcript_contains_market_word(row["word_said"], record.text)
     )
+    phrase_mentions = [
+        _market_word_match_count(row["word_said"], record.text)
+        for record in prior_transcripts
+    ]
+    transcript_word_counts = [len(_text_tokens(record.text)) for record in prior_transcripts]
+    call_structure_features = summarize_prior_call_structure(
+        [
+            _call_structure_record(record)
+            for record in transcript_index["by_symbol"].get(symbol, [])
+            if record.published_at is not None
+        ],
+        cutoff_time=event_time,
+    )
     prior_count = len(prior_transcripts)
     historical_rate = hits / prior_count if prior_count else 0.0
     word_multiplier = multipliers["words"].get(word)
@@ -259,6 +279,14 @@ def _predict_row(
             "transcript_company_symbol": symbol,
             "transcript_prior_count": str(prior_count),
             "transcript_hit_count": str(hits),
+            "company_transcript_coverage_count": str(prior_count),
+            "company_transcript_style_available": "1" if prior_count else "0",
+            "company_avg_transcript_word_count_prior": f"{_mean(transcript_word_counts):.6f}",
+            "company_avg_phrase_mentions_prior": f"{_mean(phrase_mentions):.6f}",
+            **{
+                key: _format_call_structure_feature(key, value)
+                for key, value in call_structure_features.items()
+            },
             "historical_transcript_rate": f"{historical_rate:.6f}",
             "word_multiplier": f"{multiplier:.6f}",
             "word_multiplier_observations": str(multiplier_observations),
@@ -267,6 +295,27 @@ def _predict_row(
         }
     )
     return enriched
+
+
+def _market_word_match_count(market_word: str, text: str) -> int:
+    phrase, _ = _split_min_count(market_word)
+    return max((count_rule_matches(option, text) for option in _word_options(phrase)), default=0)
+
+
+def _call_structure_record(record: TranscriptRecord) -> CallStructureRecord:
+    structure = extract_call_structure(record.text)
+    return CallStructureRecord(
+        available_at=record.published_at,
+        call_duration_minutes=structure.call_duration_minutes,
+        qa_question_count=structure.qa_question_count,
+        prepared_remarks_minutes=structure.prepared_remarks_minutes,
+    )
+
+
+def _format_call_structure_feature(key: str, value: float) -> str:
+    if key == "company_prior_call_count":
+        return str(int(value))
+    return f"{value:.6f}"
 
 
 def _build_transcript_index(root: Path) -> dict:
@@ -293,6 +342,7 @@ def scan_transcripts(root: Path) -> list[TranscriptRecord]:
             continue
         fiscal_year = int(match.group("year"))
         fiscal_quarter = int(match.group("quarter"))
+        text = path.read_text(encoding="utf-8", errors="ignore")
         records.append(
             TranscriptRecord(
                 path=path,
@@ -302,7 +352,8 @@ def scan_transcripts(root: Path) -> list[TranscriptRecord]:
                 fiscal_year=fiscal_year,
                 fiscal_quarter=fiscal_quarter,
                 estimated_available_at=_quarter_available_at(fiscal_year, fiscal_quarter),
-                text=path.read_text(encoding="utf-8", errors="ignore"),
+                published_at=_published_at_from_text(text),
+                text=text,
             )
         )
     return records
@@ -342,6 +393,20 @@ def _quarter_available_at(fiscal_year: int, fiscal_quarter: int) -> datetime:
         4: (12, 31),
     }[fiscal_quarter]
     return datetime(fiscal_year, month_day[0], month_day[1], 23, 59, 59, tzinfo=UTC)
+
+
+def _published_at_from_text(text: str) -> datetime | None:
+    match = re.search(
+        r"\b(?:published|available)\s+at\s*:\s*([^\n\r]+)",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if not match:
+        return None
+    try:
+        return _parse_datetime(match.group(1).strip())
+    except ValueError:
+        return None
 
 
 def _split_min_count(market_word: str) -> tuple[str, int]:
@@ -393,6 +458,10 @@ def _fit_multiplier(observations: list[dict], *, max_multiplier: float) -> float
     return min(max_multiplier, max(0.0, numerator / denominator))
 
 
+def _mean(values: list[int]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
 def _group_rows_by_event(rows: list[dict[str, str]]) -> list[tuple[str, list[dict[str, str]]]]:
     grouped: dict[str, list[dict[str, str]]] = defaultdict(list)
     for row in rows:
@@ -407,7 +476,10 @@ def _group_rows_by_event(rows: list[dict[str, str]]) -> list[tuple[str, list[dic
 
 
 def _parse_datetime(value: str) -> datetime:
-    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _parse_outcome(value: str) -> int:

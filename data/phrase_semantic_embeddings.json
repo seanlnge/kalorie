@@ -1,0 +1,27 @@
+{
+  "schema_version": "1.0",
+  "model": "seeded-antonym-axis-demo",
+  "provenance": {
+    "source": "agent_seeded",
+    "intended_generator": "text-embedding-3-small",
+    "generated_at": "2026-05-28",
+    "notes": "Cache-shaped local seed. Replace or extend with OpenAI embeddings before final model training."
+  },
+  "embeddings": {
+    "risk": [1.0, 0.0, 0.5, 0.0],
+    "opportunity": [0.0, 1.0, 0.0, 0.5],
+    "cost pressure": [1.0, 0.0, 1.0, 0.0],
+    "margin expansion": [0.0, 1.0, 0.0, 1.0],
+    "macro": [0.8, 0.1, 0.7, 0.1],
+    "product": [0.1, 0.8, 0.2, 0.9],
+    "specific entity": [0.1, 0.9, 0.9, 0.2],
+    "generic concept": [0.8, 0.2, 0.1, 0.8],
+    "tariff": [0.9, 0.1, 0.8, 0.2],
+    "ai": [0.2, 0.9, 0.8, 0.4],
+    "margin": [0.2, 0.9, 0.1, 0.9],
+    "revenue": [0.3, 0.8, 0.2, 0.8],
+    "inflation": [0.9, 0.1, 0.7, 0.1],
+    "cost": [0.9, 0.1, 0.9, 0.0],
+    "membership fee": [0.2, 0.8, 0.2, 0.9]
+  }
+}

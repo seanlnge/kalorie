@@ -7,7 +7,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from kalorie2.prediction_types import PredictionInputRow
+from kalorie2.prediction_types import PredictionInputRow, prediction_row_key
 from kalorie2.residual_engine import ResidualPrediction
 
 
@@ -111,6 +111,7 @@ def apply_mixmcp_to_predictions(
     if not packets_by_event:
         return predictions
     alpha_grid = alpha_grid or [index / 10 for index in range(11)]
+    rows_by_key = {prediction_row_key(row): row for row in rows}
     rows_by_market = {row.market_ticker: row for row in rows}
     rows_by_event = _rows_by_event(rows)
     grouped_predictions = _group_predictions_by_event(predictions)
@@ -120,7 +121,7 @@ def apply_mixmcp_to_predictions(
     for _, event_predictions in grouped_predictions:
         event_mixed = []
         for prediction in event_predictions:
-            row = rows_by_market.get(prediction.market_ticker)
+            row = _row_for_prediction(prediction, rows_by_key, rows_by_market)
             target = _target_for_prediction(row, prediction, packets_by_event)
             if row is None or target is None:
                 event_mixed.append(prediction)
@@ -158,6 +159,9 @@ def _select_alpha(
     alpha_mode: AlphaMode,
     side: str,
 ) -> float:
+    prior_by_key = {
+        prediction.row_key: prediction for prediction in prior_predictions if prediction.row_key
+    }
     prior_by_market = {prediction.market_ticker: prediction for prediction in prior_predictions}
     candidates = []
     for event_ticker in training_event_tickers:
@@ -165,7 +169,9 @@ def _select_alpha(
             target = _target_for_row(row, packets_by_event)
             if target is None:
                 continue
-            prior_prediction = prior_by_market.get(row.market_ticker)
+            prior_prediction = prior_by_key.get(prediction_row_key(row)) or prior_by_market.get(
+                row.market_ticker
+            )
             base_probability = (
                 float(prior_prediction.probability)
                 if prior_prediction is not None
@@ -234,6 +240,18 @@ def _target_for_prediction(
 ) -> MixMcpTargetProbability | None:
     packet = packets_by_event.get(prediction.event_ticker)
     return _target_from_packet(row, prediction.market_ticker, packet)
+
+
+def _row_for_prediction(
+    prediction: ResidualPrediction,
+    rows_by_key: dict[str, PredictionInputRow],
+    rows_by_market: dict[str, PredictionInputRow],
+) -> PredictionInputRow | None:
+    if prediction.row_key:
+        row = rows_by_key.get(prediction.row_key)
+        if row is not None:
+            return row
+    return rows_by_market.get(prediction.market_ticker)
 
 
 def _target_for_row(

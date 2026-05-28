@@ -23,6 +23,10 @@ class PrecloseSnapshot(Kalorie2Model):
     yes_mid: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     candle_end_ts: int
     staleness_seconds: int = Field(ge=0)
+    volume: int = Field(default=0, ge=0)
+    open_interest: int = Field(default=0, ge=0)
+    yes_bid_size: int = Field(default=0, ge=0)
+    yes_ask_size: int = Field(default=0, ge=0)
 
     @model_validator(mode="after")
     def bid_ask_must_be_ordered(self) -> "PrecloseSnapshot":
@@ -49,6 +53,20 @@ class HistoricalMentionMarketRow(Kalorie2Model):
     preclose_yes_mid: Decimal = Field(ge=Decimal("0"), le=Decimal("1"))
     candle_end_ts: int
     snapshot_staleness_seconds: int = Field(ge=0)
+    preclose_volume: int = Field(default=0, ge=0)
+    preclose_open_interest: int = Field(default=0, ge=0)
+    preclose_yes_bid_size: int = Field(default=0, ge=0)
+    preclose_yes_ask_size: int = Field(default=0, ge=0)
+    company_prior_call_count: int = Field(default=0, ge=0)
+    company_avg_call_duration_minutes_prior: float = Field(default=0.0, ge=0.0)
+    company_avg_qa_question_count_prior: float = Field(default=0.0, ge=0.0)
+    company_avg_prepared_remarks_minutes_prior: float = Field(default=0.0, ge=0.0)
+    company_qa_share_prior: float = Field(default=0.0, ge=0.0, le=1.0)
+    company_question_count_trend_prior: float = 0.0
+    company_transcript_coverage_count: int = Field(default=0, ge=0)
+    company_transcript_style_available: int = Field(default=0, ge=0, le=1)
+    company_avg_transcript_word_count_prior: float = Field(default=0.0, ge=0.0)
+    company_avg_phrase_mentions_prior: float = Field(default=0.0, ge=0.0)
     settlement_ts: datetime | None = None
     source: str
 

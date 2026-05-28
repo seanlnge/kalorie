@@ -1,11 +1,16 @@
 import csv
 import json
+import math
+from datetime import UTC, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from typer.testing import CliRunner
 
 from kalorie2 import prediction_cli
 from kalorie2.prediction_cli import app
+from kalorie2.prediction_types import PredictionInputRow, prediction_row_key
+from kalorie2.residual_engine import ResidualPrediction
 
 
 def _write_market_csv(path: Path) -> None:
@@ -78,6 +83,126 @@ def _write_market_csv(path: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _prediction_row(**overrides) -> PredictionInputRow:
+    payload = {
+        "market_ticker": "EVENT2-TARI",
+        "event_ticker": "EVENT2",
+        "series_ticker": "KXEARNINGSMENTIONDE",
+        "market_category": "earnings",
+        "event_phrase": "What will John Deere say during their next earnings call?",
+        "market_name": "What will John Deere say during their next earnings call? - Tariff",
+        "word_said": "Tariff",
+        "normalized_word_said": "tariff",
+        "final_outcome": "yes",
+        "status": None,
+        "close_time": datetime(2026, 1, 2, 20, tzinfo=UTC),
+        "snapshot_target_time": datetime(2026, 1, 2, 12, tzinfo=UTC),
+        "preclose_yes_bid": Decimal("0.20"),
+        "preclose_yes_ask": Decimal("0.30"),
+        "preclose_yes_mid": Decimal("0.25"),
+        "candle_end_ts": 1767369600,
+        "snapshot_staleness_seconds": 0,
+        "settlement_ts": None,
+        "source": "unit_test",
+    }
+    payload.update(overrides)
+    return PredictionInputRow.model_validate(payload)
+
+
+def test_build_trades_uses_row_key_for_duplicate_market_ticker_snapshots():
+    early = _prediction_row(
+        snapshot_target_time=datetime(2026, 1, 1, 20, tzinfo=UTC),
+        preclose_yes_ask=Decimal("0.30"),
+        preclose_yes_mid=Decimal("0.25"),
+    )
+    late = _prediction_row(
+        snapshot_target_time=datetime(2026, 1, 2, 18, tzinfo=UTC),
+        preclose_yes_ask=Decimal("0.70"),
+        preclose_yes_mid=Decimal("0.65"),
+    )
+    predictions = [
+        ResidualPrediction(
+            row_key=prediction_row_key(early),
+            market_ticker=early.market_ticker,
+            event_ticker=early.event_ticker,
+            probability=Decimal("0.80"),
+            market_probability=early.preclose_yes_mid,
+            residual_delta=0.1,
+        ),
+        ResidualPrediction(
+            row_key=prediction_row_key(late),
+            market_ticker=late.market_ticker,
+            event_ticker=late.event_ticker,
+            probability=Decimal("0.90"),
+            market_probability=late.preclose_yes_mid,
+            residual_delta=0.1,
+        ),
+    ]
+
+    trades = prediction_cli._build_trades([early, late], predictions, margin=0.0)
+
+    assert [trade["cost"] for trade in trades] == [0.3, 0.7]
+
+
+def test_summarize_predictions_reports_log_loss_and_ece():
+    rows = [
+        _prediction_row(
+            final_outcome="yes",
+            preclose_yes_bid=Decimal("0.70"),
+            preclose_yes_ask=Decimal("0.80"),
+            preclose_yes_mid=Decimal("0.75"),
+        ),
+        _prediction_row(
+            market_ticker="EVENT2-COST",
+            word_said="Cost",
+            normalized_word_said="cost",
+            final_outcome="no",
+        ),
+    ]
+    predictions = [
+        ResidualPrediction(
+            row_key=prediction_row_key(rows[0]),
+            market_ticker=rows[0].market_ticker,
+            event_ticker=rows[0].event_ticker,
+            probability=Decimal("0.80"),
+            market_probability=Decimal("0.75"),
+            residual_delta=0.1,
+        ),
+        ResidualPrediction(
+            row_key=prediction_row_key(rows[1]),
+            market_ticker=rows[1].market_ticker,
+            event_ticker=rows[1].event_ticker,
+            probability=Decimal("0.20"),
+            market_probability=Decimal("0.25"),
+            residual_delta=-0.1,
+        ),
+    ]
+
+    summary = prediction_cli._summarize_predictions(rows, predictions)
+
+    assert summary["log_loss"] == round(-math.log(0.8), 6)
+    assert summary["market_log_loss"] == round(-math.log(0.75), 6)
+    assert summary["ece"] == 0.2
+    assert summary["market_ece"] == 0.25
+
+
+def test_sweep_ranking_prefers_probability_metrics_over_roi():
+    bad_probability_high_roi = {
+        "evaluation": {"log_loss": 0.9, "brier_score": 0.30, "ece": 0.20},
+        "backtest": {"roi_on_cost": 1.0},
+    }
+    good_probability_low_roi = {
+        "evaluation": {"log_loss": 0.4, "brier_score": 0.16, "ece": 0.05},
+        "backtest": {"roi_on_cost": -0.1},
+    }
+
+    ranked = prediction_cli._rank_sweep_results(
+        [bad_probability_high_roi, good_probability_low_roi]
+    )
+
+    assert ranked[0] is good_probability_low_roi
 
 
 def test_evaluate_cli_writes_walk_forward_predictions_outside_full(tmp_path: Path):

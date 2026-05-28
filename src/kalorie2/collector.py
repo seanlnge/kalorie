@@ -1,3 +1,5 @@
+import hashlib
+import random
 import re
 import time
 from collections import Counter
@@ -287,6 +289,10 @@ class HistoricalMentionCollector:
         max_pages: int | None = None,
         max_markets: int | None = None,
         snapshot_hours_before_close: int = 8,
+        snapshot_samples_per_market: int = 1,
+        snapshot_min_hours_before_close: int = 2,
+        snapshot_max_hours_before_close: int = 48,
+        snapshot_sampling_seed: int = 0,
         snapshot_lookback_hours: int = 24,
         max_snapshot_staleness_minutes: int | None = None,
         fetch_event_market_pages: bool = False,
@@ -297,6 +303,10 @@ class HistoricalMentionCollector:
         self._max_pages = max_pages
         self._max_markets = max_markets
         self._snapshot_hours_before_close = snapshot_hours_before_close
+        self._snapshot_samples_per_market = snapshot_samples_per_market
+        self._snapshot_min_hours_before_close = snapshot_min_hours_before_close
+        self._snapshot_max_hours_before_close = snapshot_max_hours_before_close
+        self._snapshot_sampling_seed = snapshot_sampling_seed
         self._snapshot_lookback_hours = snapshot_lookback_hours
         self._max_snapshot_staleness_seconds = (
             max_snapshot_staleness_minutes * 60
@@ -335,11 +345,12 @@ class HistoricalMentionCollector:
                         )
                     )
                     continue
-                row = self._build_row(raw_market=raw_market, event_context=event_context)
-                if isinstance(row, SkippedMarket):
-                    skipped.append(row)
-                else:
-                    rows.append(row)
+                market_rows, market_skips = self._build_rows(
+                    raw_market=raw_market,
+                    event_context=event_context,
+                )
+                skipped.extend(market_skips)
+                rows.extend(market_rows)
 
         return self._build_result(rows, skipped, events_seen, markets_seen)
 
@@ -372,39 +383,45 @@ class HistoricalMentionCollector:
             ):
                 yield _merge_event_context(raw_market, context), context
 
-    def _build_row(
+    def _build_rows(
         self,
         *,
         raw_market: dict,
         event_context: dict[str, str],
-    ) -> HistoricalMentionMarketRow | SkippedMarket:
+    ) -> tuple[list[HistoricalMentionMarketRow], list[SkippedMarket]]:
         market_ticker = market_ticker_from_payload(raw_market)
         event_ticker = str(
             raw_market.get("event_ticker") or event_context.get("event_ticker") or ""
         ).strip()
         raw_market = self._hydrate_market_detail_if_needed(raw_market)
         if not is_mention_market(raw_market):
-            return SkippedMarket(
-                market_ticker=market_ticker,
-                event_ticker=event_ticker or None,
-                reason="not_mention_market",
-            )
+            return [], [
+                SkippedMarket(
+                    market_ticker=market_ticker,
+                    event_ticker=event_ticker or None,
+                    reason="not_mention_market",
+                )
+            ]
         result = str(
             raw_market.get("result") or raw_market.get("final_result") or ""
         ).strip().lower()
         if result not in {"yes", "no"}:
-            return SkippedMarket(
-                market_ticker=market_ticker,
-                event_ticker=event_ticker or None,
-                reason="missing_final_outcome",
-            )
+            return [], [
+                SkippedMarket(
+                    market_ticker=market_ticker,
+                    event_ticker=event_ticker or None,
+                    reason="missing_final_outcome",
+                )
+            ]
         close_time = parse_datetime(raw_market.get("close_time") or raw_market.get("close_ts"))
         if close_time is None:
-            return SkippedMarket(
-                market_ticker=market_ticker,
-                event_ticker=event_ticker or None,
-                reason="missing_close_time",
-            )
+            return [], [
+                SkippedMarket(
+                    market_ticker=market_ticker,
+                    event_ticker=event_ticker or None,
+                    reason="missing_close_time",
+                )
+            ]
         event_phrase = str(
             raw_market.get("event_title")
             or event_context.get("event_title")
@@ -414,11 +431,13 @@ class HistoricalMentionCollector:
         market_name = str(raw_market.get("title") or event_phrase or market_ticker or "").strip()
         word_said = extract_target_phrase(raw_market)
         if not word_said:
-            return SkippedMarket(
-                market_ticker=market_ticker,
-                event_ticker=event_ticker or None,
-                reason="missing_word_said",
-            )
+            return [], [
+                SkippedMarket(
+                    market_ticker=market_ticker,
+                    event_ticker=event_ticker or None,
+                    reason="missing_word_said",
+                )
+            ]
         if market_name == event_phrase:
             market_name = f"{event_phrase} - {word_said}" if event_phrase else word_said
         series_ticker = str(
@@ -426,61 +445,90 @@ class HistoricalMentionCollector:
         ).strip()
         if not series_ticker:
             series_ticker = series_ticker_from_event(event_ticker or market_ticker or "")
-        snapshot_target_time = close_time - timedelta(hours=self._snapshot_hours_before_close)
-        start_ts = int(
-            (snapshot_target_time - timedelta(hours=self._snapshot_lookback_hours)).timestamp()
-        )
-        end_ts = int(snapshot_target_time.timestamp())
 
-        try:
-            candles_payload = self._client.get_market_candlesticks(
-                market_ticker=str(market_ticker),
-                series_ticker=series_ticker,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                period_interval=1,
+        snapshot_offsets = self._snapshot_hour_offsets(str(market_ticker))
+        rows: list[HistoricalMentionMarketRow] = []
+        skipped: list[SkippedMarket] = []
+        for snapshot_hours_before_close in snapshot_offsets:
+            snapshot_target_time = close_time - timedelta(hours=snapshot_hours_before_close)
+            start_ts = int(
+                (snapshot_target_time - timedelta(hours=self._snapshot_lookback_hours)).timestamp()
             )
-        except httpx.HTTPError:
-            return SkippedMarket(
-                market_ticker=market_ticker,
-                event_ticker=event_ticker or None,
-                reason="snapshot_fetch_failed",
+            end_ts = int(snapshot_target_time.timestamp())
+
+            try:
+                candles_payload = self._client.get_market_candlesticks(
+                    market_ticker=str(market_ticker),
+                    series_ticker=series_ticker,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    period_interval=1,
+                )
+            except httpx.HTTPError:
+                skipped.append(
+                    SkippedMarket(
+                        market_ticker=market_ticker,
+                        event_ticker=event_ticker or None,
+                        reason="snapshot_fetch_failed",
+                    )
+                )
+                continue
+            snapshot = select_preclose_snapshot(
+                candles_payload.get("candlesticks", []),
+                target_ts=end_ts,
+                max_staleness_seconds=self._max_snapshot_staleness_seconds,
             )
-        snapshot = select_preclose_snapshot(
-            candles_payload.get("candlesticks", []),
-            target_ts=end_ts,
-            max_staleness_seconds=self._max_snapshot_staleness_seconds,
-        )
-        if snapshot is None:
-            return SkippedMarket(
-                market_ticker=market_ticker,
-                event_ticker=event_ticker or None,
-                reason="no_fresh_snapshot_candle",
+            if snapshot is None:
+                skipped.append(
+                    SkippedMarket(
+                        market_ticker=market_ticker,
+                        event_ticker=event_ticker or None,
+                        reason="no_fresh_snapshot_candle",
+                    )
+                )
+                continue
+            rows.append(
+                HistoricalMentionMarketRow(
+                    market_ticker=str(market_ticker),
+                    event_ticker=event_ticker,
+                    series_ticker=series_ticker,
+                    market_category=classify_market_category(
+                        series_ticker=series_ticker,
+                        event_title=event_phrase,
+                        market_title=market_name,
+                    ),
+                    event_phrase=event_phrase,
+                    market_name=market_name,
+                    word_said=word_said,
+                    normalized_word_said=normalize_phrase(word_said),
+                    final_outcome=result,
+                    status=str(raw_market.get("status") or "") or None,
+                    close_time=close_time,
+                    snapshot_target_time=snapshot_target_time,
+                    preclose_yes_bid=snapshot.yes_bid,
+                    preclose_yes_ask=snapshot.yes_ask,
+                    preclose_yes_mid=snapshot.yes_mid,
+                    candle_end_ts=snapshot.candle_end_ts,
+                    snapshot_staleness_seconds=snapshot.staleness_seconds,
+                    preclose_volume=snapshot.volume,
+                    preclose_open_interest=snapshot.open_interest,
+                    preclose_yes_bid_size=snapshot.yes_bid_size,
+                    preclose_yes_ask_size=snapshot.yes_ask_size,
+                    settlement_ts=parse_datetime(raw_market.get("settlement_ts")),
+                    source="kalshi_search_series",
+                )
             )
-        return HistoricalMentionMarketRow(
-            market_ticker=str(market_ticker),
-            event_ticker=event_ticker,
-            series_ticker=series_ticker,
-            market_category=classify_market_category(
-                series_ticker=series_ticker,
-                event_title=event_phrase,
-                market_title=market_name,
-            ),
-            event_phrase=event_phrase,
-            market_name=market_name,
-            word_said=word_said,
-            normalized_word_said=normalize_phrase(word_said),
-            final_outcome=result,
-            status=str(raw_market.get("status") or "") or None,
-            close_time=close_time,
-            snapshot_target_time=snapshot_target_time,
-            preclose_yes_bid=snapshot.yes_bid,
-            preclose_yes_ask=snapshot.yes_ask,
-            preclose_yes_mid=snapshot.yes_mid,
-            candle_end_ts=snapshot.candle_end_ts,
-            snapshot_staleness_seconds=snapshot.staleness_seconds,
-            settlement_ts=parse_datetime(raw_market.get("settlement_ts")),
-            source="kalshi_search_series",
+        return rows, skipped
+
+    def _snapshot_hour_offsets(self, market_ticker: str) -> tuple[int, ...]:
+        if self._snapshot_samples_per_market <= 1:
+            return (self._snapshot_hours_before_close,)
+        return sample_snapshot_hour_offsets(
+            market_ticker,
+            count=self._snapshot_samples_per_market,
+            min_hours=self._snapshot_min_hours_before_close,
+            max_hours=self._snapshot_max_hours_before_close,
+            seed=self._snapshot_sampling_seed,
         )
 
     def _hydrate_market_detail_if_needed(self, raw_market: dict) -> dict:
@@ -528,6 +576,28 @@ def is_mention_market(payload: dict) -> bool:
         )
         return any(pattern.search(text) for pattern in _MENTION_TEXT_PATTERNS)
     return False
+
+
+def sample_snapshot_hour_offsets(
+    market_ticker: str,
+    *,
+    count: int,
+    min_hours: int = 2,
+    max_hours: int = 48,
+    seed: int = 0,
+) -> tuple[int, ...]:
+    if count < 1:
+        raise ValueError("count must be at least 1")
+    if min_hours < 1:
+        raise ValueError("min_hours must be at least 1")
+    if max_hours < min_hours:
+        raise ValueError("max_hours must be greater than or equal to min_hours")
+    population = list(range(min_hours, max_hours + 1))
+    if count > len(population):
+        raise ValueError("count cannot exceed the number of available hourly offsets")
+    digest = hashlib.sha256(f"{seed}:{market_ticker}".encode()).digest()
+    rng = random.Random(int.from_bytes(digest[:8], byteorder="big", signed=False))
+    return tuple(sorted(rng.sample(population, count)))
 
 
 def is_earnings_mention_market(payload: dict, event_context: dict[str, str] | None = None) -> bool:
@@ -620,6 +690,10 @@ def select_preclose_snapshot(
         yes_mid=yes_mid,
         candle_end_ts=int(candle["end_period_ts"]),
         staleness_seconds=staleness_seconds,
+        volume=_optional_int(candle, "volume"),
+        open_interest=_optional_int(candle, "open_interest"),
+        yes_bid_size=_optional_int(candle, "yes_bid_size"),
+        yes_ask_size=_optional_int(candle, "yes_ask_size"),
     )
 
 
@@ -678,6 +752,17 @@ def _has_close(candle: dict, key: str) -> bool:
 def _candle_close(candle: dict, key: str) -> object:
     value = candle[key]
     return value.get("close_dollars", value.get("close"))
+
+
+def _optional_int(payload: dict, key: str) -> int:
+    value = payload.get(key)
+    if value is None:
+        return 0
+    if isinstance(value, dict):
+        value = value.get("value") or value.get("count") or value.get("close")
+    if value in {None, ""}:
+        return 0
+    return max(0, int(Decimal(str(value))))
 
 
 def _normalize_price(value: object) -> Decimal:
