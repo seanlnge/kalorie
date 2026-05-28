@@ -1287,3 +1287,162 @@ Verification:
 Caveat:
 
 - The bundled historical CSV predates a fully recollected random-snapshot/microstructure corpus, so newly added market microstructure and sparse transcript fields are active where present and otherwise use default/missingness-aware feature values. The v4 feature code and deterministic seed artifacts are included for the next recollected corpus.
+
+### V4 Data Rebuild + Probability Edge Plan
+
+Goal: improve the small `~0.0015` Brier edge by rebuilding the corpus so v4's new feature families are actually populated, then evaluate with leakage-safe, event-aware metrics before freezing another saved model.
+
+Design:
+
+- Treat this as a data/evaluation rebuild before a model-architecture rewrite.
+- Use `gpt-5.4-mini` for every OpenAI Responses API call, including web evidence, MixMCP, transcript discovery call sites, and live evidence refreshes.
+- Use parallel OpenAI requests where the CLI supports it, with explicit caps before paid calls. Tier 4 allows higher concurrency, but every paid command should still have `--max-paid-calls`, `--max-estimated-cost-dollars`, and `--skip-existing` where available.
+- Keep latest-30 as a strict report-only temporal holdout. No config selection or saved-model fit should use latest-30 results as the tuning target.
+
+Implementation checklist:
+
+- [x] Add failing tests that `collect-web-evidence` defaults to `gpt-5.4-mini` and that non-dry-run requests respect explicit model overrides, `--parallel-requests`, `--skip-existing`, and paid-call caps.
+- [x] Change `collect-web-evidence` default model from `gpt-5.5` to `gpt-5.4-mini`; keep MixMCP/live polling defaults on `gpt-5.4-mini`.
+- [x] Add tests for event-weighted and snapshot-collapsed metrics so duplicated random snapshots do not overstate model quality.
+- [x] Add event-weighted Brier/log-loss/ECE and Brier/log-loss edge-vs-market fields to evaluation/model-card outputs.
+- [x] Add tests for row-quality reporting around stale snapshots, wide spreads, and unavailable volume/open-interest/depth fields.
+- [x] Add row-quality diagnostics/stratified metrics before hard filtering. Do not drop rows solely because volume/open-interest is `0` until the rebuilt corpus proves those fields are populated.
+- [x] Add model-card/latest-30 provenance guardrails so in-sample training CSV scoring cannot silently be labeled as the primary `test` split.
+- [x] Recollect a run-scoped v4 corpus under `artifacts/recollect-v4/` with `--snapshot-samples-per-market 3`, random hourly offsets from 2-48 hours, a fixed sampling seed, and `--max-snapshot-staleness-minutes 120`.
+- [x] Inspect collection stats/skips and microstructure fill rates before promotion; do not promote if volume/open-interest/depth remain mostly empty or if skip/staleness rates look pathological.
+- [x] Refresh OpenAI web evidence for the rebuilt corpus using `gpt-5.4-mini`, `--parallel-requests`, `--skip-existing`, and explicit cost caps.
+- [x] Train/evaluate candidate models on the rebuilt corpus using probability metrics first: log loss, Brier, ECE, event-weighted variants, and edge-vs-market CIs. ROI remains secondary.
+- [x] Only after a better event-aware probability edge is demonstrated, freeze a new saved bundle and model card.
+
+Draft commands:
+
+```powershell
+$env:PYTHONPATH="src"
+python -m kalorie2.cli collect `
+  --out-dir artifacts/recollect-v4 `
+  --status finalized `
+  --snapshot-samples-per-market 3 `
+  --snapshot-min-hours-before-close 2 `
+  --snapshot-max-hours-before-close 48 `
+  --snapshot-sampling-seed 0 `
+  --snapshot-lookback-hours 24 `
+  --max-snapshot-staleness-minutes 120
+```
+
+```powershell
+$env:PYTHONPATH="src"
+python -m kalorie2.prediction_cli collect-web-evidence `
+  artifacts/recollect-v4/mention-markets-historical-YYYYMMDD.csv `
+  --run-id v4-data-web-evidence-YYYYMMDD `
+  --out-dir artifacts/prediction-engine/v4-data-web-evidence-YYYYMMDD `
+  --model gpt-5.4-mini `
+  --parallel-requests 12 `
+  --skip-existing `
+  --max-paid-calls 400 `
+  --max-estimated-cost-dollars 40 `
+  --estimated-cost-per-call-dollars 0.10 `
+  --no-dry-run
+```
+
+Verification gates:
+
+- Focused tests for OpenAI defaults/caps/parallelism, event-weighted metrics, row-quality diagnostics, and model-card holdout provenance pass before any paid run.
+- Full `python -m pytest -q` and `python -m ruff check .` pass before freezing a new bundle.
+- Rebuilt corpus report includes row count, event count, rows per event, skip reasons, staleness distribution, spread distribution, and microstructure fill rates.
+- Latest-30 report includes zero training-event overlap, row-weighted and event-weighted Brier/log-loss/ECE, edge-vs-market CIs, and secondary trade diagnostics.
+
+Recollection results:
+
+- Full unfiltered prefix collection completed after the restrictive `--status finalized` search was rejected by Kalshi with HTTP 400.
+- Rebuilt corpus: `artifacts/recollect-v4/mention-markets-historical-20260528.csv`.
+- Stats: `7,797` rows, `279` events seen, `3,465` markets seen, `2,316` skipped attempts.
+- Skip reasons: `141` missing final outcome, `2,175` no fresh snapshot candle under the 120-minute staleness cap.
+- Scored corpus coverage: `247` events, `3,164` markets; rows per market were `1` for `439` markets, `2` for `817`, and `3` for `1,908`.
+- Microstructure fill: open interest present on `5,776 / 7,797` rows; volume present on `936 / 7,797`; bid/ask size fields were not populated by the current candle payload.
+- Staleness: p50 `0.148h`, p90 `1.083h`, max `2.0h`.
+- Spread: p50 `0.04`, p90 `0.12`; `3,197` rows at spread >= `0.05`, `984` at spread >= `0.10`.
+
+OpenAI refresh results:
+
+- Web-evidence refresh path: `artifacts/prediction-engine/v4-data-web-evidence-20260528/web-evidence`.
+- Requests/packets/usage files: `247 / 247 / 247`.
+- Initial run aborted on one malformed `published_at` value (`2025-06-2025T00:00:00Z`); parser now treats malformed dates as undated, and the run was resumed with `--skip-existing` so completed packets were not paid twice.
+
+Evaluation results:
+
+- Full rebuilt-corpus walk-forward, `target_side=no`, `positive_label_weight=2.0`, `feature_ablation_group=resolution`: Brier `0.139807` vs market `0.140958`; log loss `0.422419` vs market `0.425517`; ECE `0.049000` vs market `0.056373`; event-weighted Brier edge `0.000949`.
+- Older validation slice (`events[-60:-30]`) did not show a large unlock. Best event-weighted Brier edge was `0.001183` on the `fresh_tight` quality policy; `spread_lt_5c` had row-weighted Brier edge `0.000790`.
+- Latest-30 report-only check, no tuning on latest-30: all rows Brier `0.177457` vs market `0.179720`, event-weighted Brier edge `0.001486`, log-loss edge `0.005485`; `fresh_tight` Brier `0.147439` vs market `0.149297`, event-weighted Brier edge `0.000943`; `spread_lt_5c` Brier `0.141805` vs market `0.143622`, event-weighted Brier edge `0.001147`.
+- Web-evidence audit found `355` issues across `173 / 247` events. Hard-excluding audited events leaves too little validation coverage (`5` validation events), so this should not be used as the next primary cleaning policy without improving audit precision.
+- Feature-family ablation on the older validation slice suggests residual `market_`/`snapshot_` inputs may be hurting: `feature_ablation_group=market` improved event-weighted Brier edge to `0.001297` vs `0.000511` for `resolution`. Latest-30 did not confirm that direction (`market` event edge `0.001102` vs `resolution` `0.001486`), while `web` ablation was best on latest-30 (`0.001596`) but not on older validation. Do not freeze a new bundle from these mixed ablation results without another validation design.
+- Robust two-fold pre-latest validation resolved the mixed signal enough to freeze a narrow candidate: `fresh_tight` rows, `feature_ablation_group=web`, `epochs=20`, `l2=0.01`, and residual scale `alpha=1.25`. Older folds averaged event-weighted Brier edge `0.002737`; weakest fold was `0.002541`.
+
+Saved Model Bundle: `models/kalorie-v5`
+
+- Bundle scope: fresh/tight rows only, defined as `snapshot_staleness_seconds <= 3600` and `yes_ask - yes_bid < 0.05`.
+- Architecture: same market-anchored no-side linear residual, trained with `target_side=no`, `positive_label_weight=2.0`, `epochs=20`, `l2=0.01`, `feature_ablation_group=web`, and scaled residual weights `alpha=1.25`.
+- Latest-30 temporal holdout, trained only on events before latest-30 and scored on fresh/tight latest-30 rows: Brier `0.143649` vs market `0.149297`; log loss `0.435790` vs market `0.451073`; ECE `0.056101` vs market `0.068165`; event-weighted Brier edge `0.001867`.
+- Latest-30 NO-only margin `0.02`: `155` trades, PnL `15.29`, ROI `18.49%`.
+- Full fresh/tight event-ordered walk-forward: Brier `0.123055` vs market `0.125913`; log loss `0.374069` vs market `0.380667`; ECE `0.028172` vs market `0.051099`; event-weighted Brier edge `0.002505`.
+- Full fresh/tight NO-only margin `0.02`: `1,218` trades, PnL `101.77`, ROI `15.65%`.
+
+Verification:
+
+- `python models/kalorie-v5/runtime/model_runtime.py --row-index 0`: loaded the saved bundle and scored row `0`.
+- Model-card validation script: `kalorie-v5 5 2`.
+- `python -m pytest`: `174 passed`.
+- `python -m ruff check .`: all checks passed.
+- IDE diagnostics: no linter errors found for `models/kalorie-v5/runtime/model_runtime.py` or `kalorie2/src/kalorie2`.
+
+### V6 Probability Edge Iteration Plan
+
+Goal: keep improving beyond `kalorie-v5` without paid API calls, using only rebuilt corpus artifacts and strict pre-latest validation until a candidate is selected.
+
+Design:
+
+- Treat `kalorie-v5` as the current baseline: fresh/tight rows, web-feature ablation, no-side residual, and `alpha=1.25`.
+- Try narrower deployment scopes and residual-confidence gates rather than adding noisy features. A smaller model scope is acceptable if the model card clearly documents when to use it and when to fall back.
+- Select candidates only on older validation folds (`events[-90:-60]` and `events[-60:-30]`). Use latest-30 only once per selected candidate as report-only.
+- Optimize probability quality first: event-weighted Brier edge, log-loss edge, row-weighted Brier edge, and calibration. ROI remains a secondary diagnostic.
+
+Checklist:
+
+- [x] Run a no-cost selective-scope sweep over v5-style models: spread thresholds, staleness thresholds, market-mid bands, open-interest/volume presence, metadata/semantic availability, and residual-confidence gates.
+- [x] Select a candidate from older folds only, requiring positive event-weighted Brier edge on both folds and better average edge than `kalorie-v5`.
+- [x] Evaluate the selected candidate on latest-30 report-only and compare directly against `kalorie-v5`.
+- [x] Freeze `models/kalorie-v6` only if the latest-30 report improves probability metrics enough to justify the narrower scope.
+- [x] Run runtime smoke test, model-card validation, `pytest`, `ruff`, IDE lint check, and record final results here.
+
+Experiment results:
+
+- Older two-fold selective sweep artifact: `artifacts/prediction-engine/v6-selective-sweep-20260528/older-fold-selective-results.json`.
+- Three-fold older validation artifact: `artifacts/prediction-engine/v6-selective-sweep-20260528/older-threefold-candidate-results.json`.
+- Latest-30 candidate check artifact: `artifacts/prediction-engine/v6-selective-sweep-20260528/latest30-candidate-results.json`.
+- `kalorie-v5` three-fold older baseline (`fresh_tight`, `web`, no residual gate): average event-weighted Brier edge `0.003899`, weakest fold `0.002541`.
+- Selected `kalorie-v6` policy (`fresh_tight`, `market` ablation, residual gate `0.03`): average older-fold event-weighted Brier edge `0.011870`, weakest fold `0.007748`; average row-weighted Brier edge `0.012766`; average log-loss edge `0.029653`.
+- The top older-fold policy (`fresh_tight_mid_10_90`, `market`, residual gate `0.03`) had stronger older-fold validation but did not beat `kalorie-v5` on latest-30 event-weighted Brier edge, so it was not promoted.
+
+Saved Model Bundle: `models/kalorie-v6`
+
+- Bundle scope: selective fresh/tight rows only, defined as `snapshot_staleness_seconds <= 3600`, `yes_ask - yes_bid < 0.05`, and `abs(model_probability - market_probability) >= 0.03`.
+- Architecture: market-anchored no-side linear residual, trained with `target_side=no`, `positive_label_weight=2.0`, `epochs=20`, `l2=0.001`, `feature_ablation_group=market`, and scaled residual weights `alpha=1.25`.
+- Runtime behavior: returns `prediction_eligible`; if the residual-confidence gate fails, default trade decision is `NONE`.
+- Latest-30 temporal holdout, trained only on events before latest-30 and evaluated on eligible fresh/tight latest-30 rows: Brier `0.202654` vs market `0.213972`; log loss `0.592050` vs market `0.617122`; ECE `0.054814` vs market `0.118151`; event-weighted Brier edge `0.004588`.
+- Latest-30 coverage: `146 / 327` fresh/tight rows across `25` events.
+- Latest-30 NO-only margin `0.02`: `134` trades, PnL `12.31`, ROI `18.74%`.
+- Full selective fresh/tight event-ordered walk-forward: Brier `0.196361` vs market `0.201145`; log loss `0.576889` vs market `0.587193`; ECE `0.062024` vs market `0.107566`; event-weighted Brier edge `0.004609`.
+- Full selective coverage: `1,183 / 3,766` fresh/tight walk-forward predictions across `213` events.
+- Full selective NO-only margin `0.02`: `907` trades, PnL `84.50`, ROI `19.67%`.
+
+Verification:
+
+- `python models/kalorie-v6/runtime/model_runtime.py --row-index 0`: loaded the saved bundle and returned `prediction_eligible=false` plus trade decision `NONE` for a row below the residual-confidence gate.
+- Model-card validation script: `kalorie-v6 6 2`.
+- `python -m pytest`: `174 passed`.
+- `python -m ruff check .`: all checks passed.
+- IDE diagnostics: no linter errors found for `models/kalorie-v6/runtime/model_runtime.py` or `kalorie2/src/kalorie2`; existing markdown duplicate-heading warnings remain in `tasks/todo.md`.
+
+Open questions before execution:
+
+- Confirm the paid web-evidence cap for the first full refresh. Draft cap is `400` calls / `$40` estimated.
+- Confirm desired parallelism. Draft is `12` OpenAI requests at a time; Tier 4 can likely tolerate this, but lower is safer for clean retries.

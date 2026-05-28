@@ -114,6 +114,26 @@ def build_evaluation_split(
             ci95=intervals["market_brier"],
             description="Baseline Brier score from market probability.",
         ),
+        "brier_edge_vs_market": MetricValue(
+            value=round(probability_summary["brier_edge_vs_market"], 6),
+            ci95=intervals["brier_edge_vs_market"],
+            description="Market Brier minus model Brier; positive means the model improved.",
+        ),
+        "event_weighted_brier": MetricValue(
+            value=round(probability_summary["event_weighted_brier"], 6),
+            ci95=intervals["event_weighted_brier"],
+            description="Event-weighted mean squared probability error.",
+        ),
+        "event_weighted_market_brier": MetricValue(
+            value=round(probability_summary["event_weighted_market_brier"], 6),
+            ci95=intervals["event_weighted_market_brier"],
+            description="Event-weighted baseline Brier score from market probability.",
+        ),
+        "event_weighted_brier_edge_vs_market": MetricValue(
+            value=round(probability_summary["event_weighted_brier_edge_vs_market"], 6),
+            ci95=intervals["event_weighted_brier_edge_vs_market"],
+            description="Event-weighted market Brier minus model Brier.",
+        ),
         "ece": MetricValue(
             value=round(probability_summary["ece"], 6),
             ci95=intervals["ece"],
@@ -124,6 +144,26 @@ def build_evaluation_split(
             ci95=intervals["market_ece"],
             description="Baseline ECE from market probability.",
         ),
+        "ece_edge_vs_market": MetricValue(
+            value=round(probability_summary["ece_edge_vs_market"], 6),
+            ci95=intervals["ece_edge_vs_market"],
+            description="Market ECE minus model ECE; positive means the model improved.",
+        ),
+        "event_weighted_ece": MetricValue(
+            value=round(probability_summary["event_weighted_ece"], 6),
+            ci95=intervals["event_weighted_ece"],
+            description="Event-weighted ten-bin expected calibration error.",
+        ),
+        "event_weighted_market_ece": MetricValue(
+            value=round(probability_summary["event_weighted_market_ece"], 6),
+            ci95=intervals["event_weighted_market_ece"],
+            description="Event-weighted baseline ECE from market probability.",
+        ),
+        "event_weighted_ece_edge_vs_market": MetricValue(
+            value=round(probability_summary["event_weighted_ece_edge_vs_market"], 6),
+            ci95=intervals["event_weighted_ece_edge_vs_market"],
+            description="Event-weighted market ECE minus model ECE.",
+        ),
         "log_loss": MetricValue(
             value=round(probability_summary["log_loss"], 6),
             ci95=intervals["log_loss"],
@@ -133,6 +173,26 @@ def build_evaluation_split(
             value=round(probability_summary["market_log_loss"], 6),
             ci95=intervals["market_log_loss"],
             description="Baseline log loss from market probability.",
+        ),
+        "log_loss_edge_vs_market": MetricValue(
+            value=round(probability_summary["log_loss_edge_vs_market"], 6),
+            ci95=intervals["log_loss_edge_vs_market"],
+            description="Market log loss minus model log loss; positive means the model improved.",
+        ),
+        "event_weighted_log_loss": MetricValue(
+            value=round(probability_summary["event_weighted_log_loss"], 6),
+            ci95=intervals["event_weighted_log_loss"],
+            description="Event-weighted cross-entropy log loss.",
+        ),
+        "event_weighted_market_log_loss": MetricValue(
+            value=round(probability_summary["event_weighted_market_log_loss"], 6),
+            ci95=intervals["event_weighted_market_log_loss"],
+            description="Event-weighted baseline log loss from market probability.",
+        ),
+        "event_weighted_log_loss_edge_vs_market": MetricValue(
+            value=round(probability_summary["event_weighted_log_loss_edge_vs_market"], 6),
+            ci95=intervals["event_weighted_log_loss_edge_vs_market"],
+            description="Event-weighted market log loss minus model log loss.",
         ),
     }
     return EvaluationSplit(
@@ -150,24 +210,64 @@ def summarize_probability_metrics(rows: list[EvaluationRow]) -> dict[str, float]
         return {
             "brier": 0.0,
             "market_brier": 0.0,
+            "brier_edge_vs_market": 0.0,
+            "event_weighted_brier": 0.0,
+            "event_weighted_market_brier": 0.0,
+            "event_weighted_brier_edge_vs_market": 0.0,
             "ece": 0.0,
             "market_ece": 0.0,
+            "ece_edge_vs_market": 0.0,
+            "event_weighted_ece": 0.0,
+            "event_weighted_market_ece": 0.0,
+            "event_weighted_ece_edge_vs_market": 0.0,
             "log_loss": 0.0,
             "market_log_loss": 0.0,
+            "log_loss_edge_vs_market": 0.0,
+            "event_weighted_log_loss": 0.0,
+            "event_weighted_market_log_loss": 0.0,
+            "event_weighted_log_loss_edge_vs_market": 0.0,
         }
+    brier = _mean(
+        (row.model_probability - row.outcome_label) ** 2
+        for row in rows
+    )
+    market_brier = _mean(
+        (row.market_probability - row.outcome_label) ** 2
+        for row in rows
+    )
+    ece = _ece(rows, probability_key="model_probability")
+    market_ece = _ece(rows, probability_key="market_probability")
+    log_loss = _log_loss(rows, probability_key="model_probability")
+    market_log_loss = _log_loss(rows, probability_key="market_probability")
+    event_weighted = _event_weighted_probability_metrics(rows)
     return {
         "brier": _mean(
             (row.model_probability - row.outcome_label) ** 2
             for row in rows
         ),
-        "market_brier": _mean(
-            (row.market_probability - row.outcome_label) ** 2
-            for row in rows
+        "market_brier": market_brier,
+        "brier_edge_vs_market": market_brier - brier,
+        "event_weighted_brier": event_weighted["brier"],
+        "event_weighted_market_brier": event_weighted["market_brier"],
+        "event_weighted_brier_edge_vs_market": (
+            event_weighted["market_brier"] - event_weighted["brier"]
         ),
-        "ece": _ece(rows, probability_key="model_probability"),
-        "market_ece": _ece(rows, probability_key="market_probability"),
-        "log_loss": _log_loss(rows, probability_key="model_probability"),
-        "market_log_loss": _log_loss(rows, probability_key="market_probability"),
+        "ece": ece,
+        "market_ece": market_ece,
+        "ece_edge_vs_market": market_ece - ece,
+        "event_weighted_ece": event_weighted["ece"],
+        "event_weighted_market_ece": event_weighted["market_ece"],
+        "event_weighted_ece_edge_vs_market": (
+            event_weighted["market_ece"] - event_weighted["ece"]
+        ),
+        "log_loss": log_loss,
+        "market_log_loss": market_log_loss,
+        "log_loss_edge_vs_market": market_log_loss - log_loss,
+        "event_weighted_log_loss": event_weighted["log_loss"],
+        "event_weighted_market_log_loss": event_weighted["market_log_loss"],
+        "event_weighted_log_loss_edge_vs_market": (
+            event_weighted["market_log_loss"] - event_weighted["log_loss"]
+        ),
     }
 
 
@@ -179,26 +279,14 @@ def bootstrap_metric_intervals(
 ) -> dict[str, ConfidenceInterval]:
     if not rows:
         zeros = ConfidenceInterval(low=0.0, high=0.0)
-        return {
-            "brier": zeros,
-            "market_brier": zeros,
-            "ece": zeros,
-            "market_ece": zeros,
-            "log_loss": zeros,
-            "market_log_loss": zeros,
-        }
+        return {key: zeros for key in summarize_probability_metrics([])}
     grouped: dict[str, list[EvaluationRow]] = {}
     for row in rows:
         grouped.setdefault(row.event_ticker, []).append(row)
     groups = list(grouped.values())
     rng = random.Random(seed)
     metrics: dict[str, list[float]] = {
-        "brier": [],
-        "market_brier": [],
-        "ece": [],
-        "market_ece": [],
-        "log_loss": [],
-        "market_log_loss": [],
+        key: [] for key in summarize_probability_metrics(rows)
     }
     for _ in range(samples):
         sampled_rows: list[EvaluationRow] = []
@@ -213,6 +301,37 @@ def bootstrap_metric_intervals(
             high=round(_percentile(values, 0.975), 6),
         )
         for key, values in metrics.items()
+    }
+
+
+def _event_weighted_probability_metrics(rows: list[EvaluationRow]) -> dict[str, float]:
+    grouped: dict[str, list[EvaluationRow]] = {}
+    for row in rows:
+        grouped.setdefault(row.event_ticker, []).append(row)
+    event_summaries = [
+        {
+            "brier": _mean(
+                (row.model_probability - row.outcome_label) ** 2
+                for row in event_rows
+            ),
+            "market_brier": _mean(
+                (row.market_probability - row.outcome_label) ** 2
+                for row in event_rows
+            ),
+            "ece": _ece(event_rows, probability_key="model_probability"),
+            "market_ece": _ece(event_rows, probability_key="market_probability"),
+            "log_loss": _log_loss(event_rows, probability_key="model_probability"),
+            "market_log_loss": _log_loss(event_rows, probability_key="market_probability"),
+        }
+        for event_rows in grouped.values()
+    ]
+    return {
+        "brier": _mean(item["brier"] for item in event_summaries),
+        "market_brier": _mean(item["market_brier"] for item in event_summaries),
+        "ece": _mean(item["ece"] for item in event_summaries),
+        "market_ece": _mean(item["market_ece"] for item in event_summaries),
+        "log_loss": _mean(item["log_loss"] for item in event_summaries),
+        "market_log_loss": _mean(item["market_log_loss"] for item in event_summaries),
     }
 
 

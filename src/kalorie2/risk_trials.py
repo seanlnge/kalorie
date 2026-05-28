@@ -242,7 +242,13 @@ def _projection_market_counts(max_markets: int) -> list[int]:
         500,
         max_markets,
     ]
-    return sorted({min(max_markets, count) for count in candidates if count <= max_markets or count == max_markets})
+    return sorted(
+        {
+            min(max_markets, count)
+            for count in candidates
+            if count <= max_markets or count == max_markets
+        }
+    )
 
 
 def _risk_return_per_market_samples(

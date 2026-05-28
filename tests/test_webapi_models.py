@@ -251,8 +251,9 @@ def test_custom_risk_trial_endpoint_computes_metrics_from_saved_rows(tmp_path: P
     assert trial["roi_projection"][0]["roi"]["expected"] == 0
     assert trial["roi_projection"][-1]["market_count"] == trial["market_count"]
     assert all(
-        left["market_count"] < right["market_count"]
-        for left, right in zip(trial["roi_projection"], trial["roi_projection"][1:])
+        trial["roi_projection"][index]["market_count"]
+        < trial["roi_projection"][index + 1]["market_count"]
+        for index in range(len(trial["roi_projection"]) - 1)
     )
     assert trial["roi_paths"]
     assert all(path[0]["market_count"] == 0 and path[0]["roi"] == 0 for path in trial["roi_paths"])

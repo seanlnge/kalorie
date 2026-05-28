@@ -188,6 +188,104 @@ def test_summarize_predictions_reports_log_loss_and_ece():
     assert summary["market_ece"] == 0.25
 
 
+def test_summarize_predictions_reports_event_weighted_and_collapsed_edges():
+    good_event = _prediction_row(
+        market_ticker="EVENT1-TARI",
+        event_ticker="EVENT1",
+        final_outcome="yes",
+        preclose_yes_mid=Decimal("0.50"),
+        snapshot_target_time=datetime(2026, 1, 1, 12, tzinfo=UTC),
+    )
+    bad_snapshot_1 = _prediction_row(
+        market_ticker="EVENT2-TARI",
+        event_ticker="EVENT2",
+        final_outcome="no",
+        preclose_yes_mid=Decimal("0.50"),
+        snapshot_target_time=datetime(2026, 1, 2, 12, tzinfo=UTC),
+    )
+    bad_snapshot_2 = _prediction_row(
+        market_ticker="EVENT2-TARI",
+        event_ticker="EVENT2",
+        final_outcome="no",
+        preclose_yes_mid=Decimal("0.50"),
+        snapshot_target_time=datetime(2026, 1, 2, 13, tzinfo=UTC),
+    )
+    bad_snapshot_3 = _prediction_row(
+        market_ticker="EVENT2-TARI",
+        event_ticker="EVENT2",
+        final_outcome="no",
+        preclose_yes_mid=Decimal("0.50"),
+        snapshot_target_time=datetime(2026, 1, 2, 14, tzinfo=UTC),
+    )
+    rows = [good_event, bad_snapshot_1, bad_snapshot_2, bad_snapshot_3]
+    predictions = [
+        ResidualPrediction(
+            row_key=prediction_row_key(row),
+            market_ticker=row.market_ticker,
+            event_ticker=row.event_ticker,
+            probability=Decimal("0.90"),
+            market_probability=row.preclose_yes_mid,
+            residual_delta=0.1,
+        )
+        for row in rows
+    ]
+
+    summary = prediction_cli._summarize_predictions(rows, predictions)
+
+    assert summary["brier_score"] == 0.61
+    assert summary["event_weighted_brier_score"] == 0.41
+    assert summary["snapshot_collapsed_brier_score"] == 0.41
+    assert summary["brier_edge_vs_market"] == -0.36
+    assert summary["event_weighted_brier_edge_vs_market"] == -0.16
+
+
+def test_summarize_predictions_reports_row_quality_without_filtering_zero_microstructure():
+    fresh_tight = _prediction_row(
+        snapshot_staleness_seconds=30 * 60,
+        preclose_yes_bid=Decimal("0.49"),
+        preclose_yes_ask=Decimal("0.51"),
+        preclose_yes_mid=Decimal("0.50"),
+        preclose_volume=0,
+        preclose_open_interest=0,
+        preclose_yes_bid_size=0,
+        preclose_yes_ask_size=0,
+    )
+    stale_wide = _prediction_row(
+        market_ticker="EVENT2-COST",
+        word_said="Cost",
+        normalized_word_said="cost",
+        snapshot_staleness_seconds=5 * 60 * 60,
+        preclose_yes_bid=Decimal("0.20"),
+        preclose_yes_ask=Decimal("0.35"),
+        preclose_yes_mid=Decimal("0.275"),
+        preclose_volume=0,
+        preclose_open_interest=0,
+        preclose_yes_bid_size=0,
+        preclose_yes_ask_size=0,
+    )
+    predictions = [
+        ResidualPrediction(
+            row_key=prediction_row_key(row),
+            market_ticker=row.market_ticker,
+            event_ticker=row.event_ticker,
+            probability=Decimal("0.50"),
+            market_probability=row.preclose_yes_mid,
+            residual_delta=0.0,
+        )
+        for row in [fresh_tight, stale_wide]
+    ]
+
+    summary = prediction_cli._summarize_predictions([fresh_tight, stale_wide], predictions)
+
+    assert summary["prediction_count"] == 2
+    assert summary["row_quality"]["row_count"] == 2
+    assert summary["row_quality"]["stale_over_4h_count"] == 1
+    assert summary["row_quality"]["wide_spread_over_10c_count"] == 1
+    assert summary["row_quality"]["microstructure_volume_present_count"] == 0
+    assert summary["row_quality"]["buckets"]["fresh_tight"]["count"] == 1
+    assert summary["row_quality"]["buckets"]["stale_wide"]["count"] == 1
+
+
 def test_sweep_ranking_prefers_probability_metrics_over_roi():
     bad_probability_high_roi = {
         "evaluation": {"log_loss": 0.9, "brier_score": 0.30, "ece": 0.20},
@@ -473,6 +571,34 @@ def test_collect_web_evidence_dry_run_writes_payloads_outside_full(tmp_path: Pat
     assert request_payload["tools"] == [{"type": "web_search"}]
     assert request_payload["text"]["format"]["strict"] is True
     assert not (out_dir / "web-evidence" / "packets" / "EVENT1.json").exists()
+
+
+def test_collect_web_evidence_dry_run_defaults_to_mini_model(tmp_path: Path):
+    input_csv = tmp_path / "markets.csv"
+    out_dir = tmp_path / "artifacts" / "prediction-engine" / "unit"
+    _write_market_csv(input_csv)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "collect-web-evidence",
+            str(input_csv),
+            "--run-id",
+            "unit",
+            "--out-dir",
+            str(out_dir),
+            "--max-events",
+            "1",
+            "--dry-run",
+        ],
+    )
+
+    request_payload = json.loads(
+        (out_dir / "web-evidence" / "requests" / "EVENT1.json").read_text(encoding="utf-8")
+    )
+
+    assert result.exit_code == 0
+    assert request_payload["model"] == "gpt-5.4-mini"
 
 
 def test_collect_web_evidence_live_uses_configurable_timeout(

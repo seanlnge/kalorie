@@ -100,7 +100,7 @@ def collect_web_evidence_command(
     input_csv: Annotated[Path, typer.Argument(exists=True, dir_okay=False)],
     run_id: Annotated[str, typer.Option()],
     out_dir: Annotated[Path, typer.Option()],
-    model: Annotated[str, typer.Option()] = "gpt-5.5",
+    model: Annotated[str, typer.Option()] = "gpt-5.4-mini",
     max_events: Annotated[int | None, typer.Option(min=1)] = None,
     dry_run: Annotated[bool, typer.Option()] = True,
     request_timeout_seconds: Annotated[float, typer.Option(min=1.0)] = 600.0,
@@ -969,10 +969,28 @@ def _write_sweep_csv_checked(
         "prediction_count",
         "log_loss",
         "market_log_loss",
+        "log_loss_edge_vs_market",
+        "event_weighted_log_loss",
+        "event_weighted_market_log_loss",
+        "event_weighted_log_loss_edge_vs_market",
+        "snapshot_collapsed_log_loss",
+        "snapshot_collapsed_market_log_loss",
         "brier_score",
         "market_brier_score",
+        "brier_edge_vs_market",
+        "event_weighted_brier_score",
+        "event_weighted_market_brier_score",
+        "event_weighted_brier_edge_vs_market",
+        "snapshot_collapsed_brier_score",
+        "snapshot_collapsed_market_brier_score",
         "ece",
         "market_ece",
+        "ece_edge_vs_market",
+        "event_weighted_ece",
+        "event_weighted_market_ece",
+        "event_weighted_ece_edge_vs_market",
+        "snapshot_collapsed_ece",
+        "snapshot_collapsed_market_ece",
         "trades",
         "total_cost",
         "total_pnl",
@@ -982,13 +1000,12 @@ def _write_sweep_csv_checked(
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for result in results:
-            writer.writerow(
-                {
-                    **result["config"],
-                    **result["evaluation"],
-                    **result["backtest"],
-                }
-            )
+            row = {
+                **result["config"],
+                **result["evaluation"],
+                **result["backtest"],
+            }
+            writer.writerow({field: row.get(field) for field in fieldnames})
 
 
 def _summarize_predictions(
@@ -1007,10 +1024,29 @@ def _summarize_predictions(
             "prediction_count": 0,
             "brier_score": None,
             "market_brier_score": None,
+            "brier_edge_vs_market": None,
+            "event_weighted_brier_score": None,
+            "event_weighted_market_brier_score": None,
+            "event_weighted_brier_edge_vs_market": None,
+            "snapshot_collapsed_brier_score": None,
+            "snapshot_collapsed_market_brier_score": None,
             "log_loss": None,
             "market_log_loss": None,
+            "log_loss_edge_vs_market": None,
+            "event_weighted_log_loss": None,
+            "event_weighted_market_log_loss": None,
+            "event_weighted_log_loss_edge_vs_market": None,
+            "snapshot_collapsed_log_loss": None,
+            "snapshot_collapsed_market_log_loss": None,
             "ece": None,
             "market_ece": None,
+            "ece_edge_vs_market": None,
+            "event_weighted_ece": None,
+            "event_weighted_market_ece": None,
+            "event_weighted_ece_edge_vs_market": None,
+            "snapshot_collapsed_ece": None,
+            "snapshot_collapsed_market_ece": None,
+            "row_quality": _row_quality_summary([]),
         }
     model_pairs = [
         (float(prediction.probability), row.outcome_label)
@@ -1020,20 +1056,41 @@ def _summarize_predictions(
         (float(row.preclose_yes_mid), row.outcome_label)
         for _, row in prediction_rows
     ]
+    brier_score = _brier_score(model_pairs)
+    market_brier_score = _brier_score(market_pairs)
+    log_loss = _log_loss(model_pairs)
+    market_log_loss = _log_loss(market_pairs)
+    ece = _expected_calibration_error(model_pairs)
+    market_ece = _expected_calibration_error(market_pairs)
+    event_weighted = _event_weighted_probability_summary(prediction_rows)
+    snapshot_collapsed = _snapshot_collapsed_probability_summary(prediction_rows)
     return {
         "prediction_count": len(prediction_rows),
-        "brier_score": _mean(
-            (float(prediction.probability) - row.outcome_label) ** 2
-            for prediction, row in prediction_rows
-        ),
-        "market_brier_score": _mean(
-            (float(row.preclose_yes_mid) - row.outcome_label) ** 2
-            for _, row in prediction_rows
-        ),
-        "log_loss": _log_loss(model_pairs),
-        "market_log_loss": _log_loss(market_pairs),
-        "ece": _expected_calibration_error(model_pairs),
-        "market_ece": _expected_calibration_error(market_pairs),
+        "brier_score": brier_score,
+        "market_brier_score": market_brier_score,
+        "brier_edge_vs_market": round(market_brier_score - brier_score, 6),
+        "event_weighted_brier_score": event_weighted["brier_score"],
+        "event_weighted_market_brier_score": event_weighted["market_brier_score"],
+        "event_weighted_brier_edge_vs_market": event_weighted["brier_edge_vs_market"],
+        "snapshot_collapsed_brier_score": snapshot_collapsed["brier_score"],
+        "snapshot_collapsed_market_brier_score": snapshot_collapsed["market_brier_score"],
+        "log_loss": log_loss,
+        "market_log_loss": market_log_loss,
+        "log_loss_edge_vs_market": round(market_log_loss - log_loss, 6),
+        "event_weighted_log_loss": event_weighted["log_loss"],
+        "event_weighted_market_log_loss": event_weighted["market_log_loss"],
+        "event_weighted_log_loss_edge_vs_market": event_weighted["log_loss_edge_vs_market"],
+        "snapshot_collapsed_log_loss": snapshot_collapsed["log_loss"],
+        "snapshot_collapsed_market_log_loss": snapshot_collapsed["market_log_loss"],
+        "ece": ece,
+        "market_ece": market_ece,
+        "ece_edge_vs_market": round(market_ece - ece, 6),
+        "event_weighted_ece": event_weighted["ece"],
+        "event_weighted_market_ece": event_weighted["market_ece"],
+        "event_weighted_ece_edge_vs_market": event_weighted["ece_edge_vs_market"],
+        "snapshot_collapsed_ece": snapshot_collapsed["ece"],
+        "snapshot_collapsed_market_ece": snapshot_collapsed["market_ece"],
+        "row_quality": _row_quality_summary(prediction_rows),
     }
 
 
@@ -1099,6 +1156,156 @@ def _row_for_prediction(
     return rows_by_ticker.get(prediction.market_ticker)
 
 
+def _event_weighted_probability_summary(
+    prediction_rows: list[tuple[ResidualPrediction, PredictionInputRow]],
+) -> dict[str, float]:
+    grouped: dict[str, list[tuple[ResidualPrediction, PredictionInputRow]]] = defaultdict(list)
+    for prediction, row in prediction_rows:
+        grouped[row.event_ticker].append((prediction, row))
+    event_summaries = [
+        _probability_summary_for_pairs(_pairs_for_prediction_rows(event_rows))
+        for event_rows in grouped.values()
+    ]
+    summary = {
+        "brier_score": _mean(item["brier_score"] for item in event_summaries),
+        "market_brier_score": _mean(item["market_brier_score"] for item in event_summaries),
+        "log_loss": _mean(item["log_loss"] for item in event_summaries),
+        "market_log_loss": _mean(item["market_log_loss"] for item in event_summaries),
+        "ece": _mean(item["ece"] for item in event_summaries),
+        "market_ece": _mean(item["market_ece"] for item in event_summaries),
+    }
+    return {
+        **summary,
+        "brier_edge_vs_market": round(
+            summary["market_brier_score"] - summary["brier_score"],
+            6,
+        ),
+        "log_loss_edge_vs_market": round(
+            summary["market_log_loss"] - summary["log_loss"],
+            6,
+        ),
+        "ece_edge_vs_market": round(summary["market_ece"] - summary["ece"], 6),
+    }
+
+
+def _snapshot_collapsed_probability_summary(
+    prediction_rows: list[tuple[ResidualPrediction, PredictionInputRow]],
+) -> dict[str, float]:
+    grouped: dict[
+        tuple[str, str],
+        list[tuple[ResidualPrediction, PredictionInputRow]],
+    ] = defaultdict(list)
+    for prediction, row in prediction_rows:
+        grouped[(row.event_ticker, row.market_ticker)].append((prediction, row))
+    model_pairs = []
+    market_pairs = []
+    for market_rows in grouped.values():
+        outcome = market_rows[0][1].outcome_label
+        model_pairs.append(
+            (
+                sum(float(prediction.probability) for prediction, _ in market_rows)
+                / len(market_rows),
+                outcome,
+            )
+        )
+        market_pairs.append(
+            (
+                sum(float(row.preclose_yes_mid) for _, row in market_rows) / len(market_rows),
+                outcome,
+            )
+        )
+    return _probability_summary_for_pairs((model_pairs, market_pairs))
+
+
+def _pairs_for_prediction_rows(
+    prediction_rows: list[tuple[ResidualPrediction, PredictionInputRow]],
+) -> tuple[list[tuple[float, int]], list[tuple[float, int]]]:
+    return (
+        [
+            (float(prediction.probability), row.outcome_label)
+            for prediction, row in prediction_rows
+        ],
+        [(float(row.preclose_yes_mid), row.outcome_label) for _, row in prediction_rows],
+    )
+
+
+def _probability_summary_for_pairs(
+    pairs: tuple[list[tuple[float, int]], list[tuple[float, int]]],
+) -> dict[str, float]:
+    model_pairs, market_pairs = pairs
+    return {
+        "brier_score": _brier_score(model_pairs),
+        "market_brier_score": _brier_score(market_pairs),
+        "log_loss": _log_loss(model_pairs),
+        "market_log_loss": _log_loss(market_pairs),
+        "ece": _expected_calibration_error(model_pairs),
+        "market_ece": _expected_calibration_error(market_pairs),
+    }
+
+
+def _row_quality_summary(
+    prediction_rows: list[tuple[ResidualPrediction, PredictionInputRow]],
+) -> dict:
+    buckets = {
+        "fresh_tight": [],
+        "fresh_wide": [],
+        "stale_tight": [],
+        "stale_wide": [],
+    }
+    for prediction, row in prediction_rows:
+        stale = row.snapshot_staleness_seconds > 60 * 60
+        wide = float(row.preclose_yes_ask - row.preclose_yes_bid) >= 0.05
+        bucket_name = f"{'stale' if stale else 'fresh'}_{'wide' if wide else 'tight'}"
+        buckets[bucket_name].append((prediction, row))
+    return {
+        "row_count": len(prediction_rows),
+        "stale_over_1h_count": sum(
+            1 for _, row in prediction_rows if row.snapshot_staleness_seconds > 60 * 60
+        ),
+        "stale_over_4h_count": sum(
+            1 for _, row in prediction_rows if row.snapshot_staleness_seconds > 4 * 60 * 60
+        ),
+        "stale_over_12h_count": sum(
+            1 for _, row in prediction_rows if row.snapshot_staleness_seconds > 12 * 60 * 60
+        ),
+        "wide_spread_over_5c_count": sum(
+            1
+            for _, row in prediction_rows
+            if float(row.preclose_yes_ask - row.preclose_yes_bid) >= 0.05
+        ),
+        "wide_spread_over_10c_count": sum(
+            1
+            for _, row in prediction_rows
+            if float(row.preclose_yes_ask - row.preclose_yes_bid) >= 0.10
+        ),
+        "microstructure_volume_present_count": sum(
+            1 for _, row in prediction_rows if row.preclose_volume > 0
+        ),
+        "microstructure_open_interest_present_count": sum(
+            1 for _, row in prediction_rows if row.preclose_open_interest > 0
+        ),
+        "microstructure_depth_present_count": sum(
+            1
+            for _, row in prediction_rows
+            if row.preclose_yes_bid_size > 0 or row.preclose_yes_ask_size > 0
+        ),
+        "buckets": {
+            name: {
+                "count": len(bucket_rows),
+                "brier_score": _brier_score(
+                    [
+                        (float(prediction.probability), row.outcome_label)
+                        for prediction, row in bucket_rows
+                    ]
+                )
+                if bucket_rows
+                else None,
+            }
+            for name, bucket_rows in buckets.items()
+        },
+    }
+
+
 def _summarize_trades(trades: list[dict]) -> dict:
     total_cost = sum(trade["cost"] for trade in trades)
     total_pnl = sum(trade["pnl"] for trade in trades)
@@ -1124,7 +1331,13 @@ def _rank_sweep_results(results: list[dict]) -> list[dict]:
 
 def _mean(values) -> float:
     collected = list(values)
+    if not collected:
+        return 0.0
     return round(sum(collected) / len(collected), 6)
+
+
+def _brier_score(probability_outcomes: list[tuple[float, int]]) -> float:
+    return _mean((probability - outcome) ** 2 for probability, outcome in probability_outcomes)
 
 
 def _log_loss(probability_outcomes: list[tuple[float, int]]) -> float:

@@ -43,6 +43,10 @@ class WebEvidenceItem(WebEvidenceModel):
                 or re.match(r"\d{4}-\d{2}-00", cleaned)
             ):
                 return None
+            try:
+                datetime.fromisoformat(cleaned.replace("Z", "+00:00"))
+            except ValueError:
+                return None
         return value
 
     @field_validator("published_at")

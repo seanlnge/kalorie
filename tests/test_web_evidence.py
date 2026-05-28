@@ -122,6 +122,18 @@ def test_web_evidence_packet_treats_zero_dates_as_undated():
     assert packet.items[1].published_at is None
 
 
+def test_web_evidence_packet_treats_malformed_dates_as_undated():
+    payload = _packet_payload()
+    payload["items"][0]["published_at"] = "2025-06-2025T00:00:00Z"
+
+    packet = parse_web_evidence_response(json.dumps(payload))
+
+    retained = packet.cutoff_safe_items()
+
+    assert len(retained) == 0
+    assert packet.items[0].published_at is None
+
+
 def test_web_evidence_packet_features_use_only_retained_sources():
     packet = WebEvidencePacket.model_validate(_packet_payload())
 

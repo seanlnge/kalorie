@@ -71,6 +71,7 @@ def generate_model_card_for_model(
             "evaluation_protocol": (
                 "Primary test split uses latest events by close time scored with saved runtime."
             ),
+            **_latest_training_overlap_summary(raw_rows, latest_rows),
         },
         feature_set={
             "feature_count": _feature_count(feature_schema, model_payload),
@@ -101,6 +102,11 @@ def generate_model_card_for_model(
         ],
         caveats=[
             "CI values use event-bootstrap resampling.",
+            (
+                "Latest-event scoring provenance is recorded in training_data; "
+                "nonzero training overlap means the split is a reference view, not a strict "
+                "out-of-sample holdout."
+            ),
             (
                 "Model card metrics evaluate predictive quality only; "
                 "risk presets handle trading policy."
@@ -181,6 +187,25 @@ def _evaluation_rows(
 def _load_csv_rows(path: Path) -> list[dict[str, Any]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         return list(csv.DictReader(handle))
+
+
+def _latest_training_overlap_summary(
+    raw_training_rows: list[dict[str, Any]],
+    latest_rows: list[EvaluationRow],
+) -> dict[str, int | str]:
+    training_events = {
+        str(row.get("event_ticker"))
+        for row in raw_training_rows
+        if row.get("event_ticker")
+    }
+    latest_events = {row.event_ticker for row in latest_rows}
+    return {
+        "primary_test_source": "saved_runtime_scored_training_csv",
+        "primary_test_training_overlap_event_count": len(latest_events & training_events),
+        "primary_test_training_overlap_market_count": sum(
+            1 for row in latest_rows if row.event_ticker in training_events
+        ),
+    }
 
 
 def _training_csv_path(model_dir: Path, training_manifest: dict[str, Any]) -> Path:

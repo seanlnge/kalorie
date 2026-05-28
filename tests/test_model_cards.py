@@ -1,5 +1,6 @@
 import json
 
+from kalorie2.model_card_cli import _latest_training_overlap_summary
 from kalorie2.model_cards import (
     ConfidenceInterval,
     EvaluationRow,
@@ -71,6 +72,41 @@ def test_build_model_card_schema_exports_json_schema() -> None:
     assert "default_margin" not in schema["properties"]
     assert "risk_preset_trials" not in schema["properties"]
     assert json.dumps(schema)
+
+
+def test_latest_training_overlap_summary_exposes_in_sample_latest_rows() -> None:
+    raw_training_rows = [
+        {"event_ticker": "E1", "market_ticker": "E1-TARI"},
+        {"event_ticker": "E2", "market_ticker": "E2-TARI"},
+    ]
+    latest_rows = [
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.5,
+            model_probability=0.4,
+            yes_bid=0.49,
+            yes_ask=0.51,
+        ),
+        EvaluationRow(
+            event_ticker="E3",
+            close_time=parse_iso_utc("2026-01-03T00:00:00Z"),
+            outcome_label=1,
+            market_probability=0.5,
+            model_probability=0.6,
+            yes_bid=0.49,
+            yes_ask=0.51,
+        ),
+    ]
+
+    summary = _latest_training_overlap_summary(raw_training_rows, latest_rows)
+
+    assert summary == {
+        "primary_test_source": "saved_runtime_scored_training_csv",
+        "primary_test_training_overlap_event_count": 1,
+        "primary_test_training_overlap_market_count": 1,
+    }
 
 
 def test_latest_event_rows_keeps_recent_events_only() -> None:
@@ -166,6 +202,61 @@ def test_build_evaluation_split_includes_latest30_metrics_with_ci() -> None:
     assert split.metrics["log_loss"].ci95 is not None
 
 
+def test_build_evaluation_split_includes_event_weighted_edges() -> None:
+    rows = [
+        EvaluationRow(
+            event_ticker="E1",
+            close_time=parse_iso_utc("2026-01-01T00:00:00Z"),
+            outcome_label=1,
+            market_probability=0.5,
+            model_probability=0.9,
+            yes_bid=0.49,
+            yes_ask=0.51,
+        ),
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.5,
+            model_probability=0.9,
+            yes_bid=0.49,
+            yes_ask=0.51,
+        ),
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.5,
+            model_probability=0.9,
+            yes_bid=0.49,
+            yes_ask=0.51,
+        ),
+        EvaluationRow(
+            event_ticker="E2",
+            close_time=parse_iso_utc("2026-01-02T00:00:00Z"),
+            outcome_label=0,
+            market_probability=0.5,
+            model_probability=0.9,
+            yes_bid=0.49,
+            yes_ask=0.51,
+        ),
+    ]
+
+    split = build_evaluation_split(
+        rows,
+        name="latest30",
+        role="test",
+        bootstrap_samples=20,
+        bootstrap_seed=7,
+    )
+
+    assert split.metrics["brier"].value == 0.61
+    assert split.metrics["event_weighted_brier"].value == 0.41
+    assert split.metrics["brier_edge_vs_market"].value == -0.36
+    assert split.metrics["event_weighted_brier_edge_vs_market"].value == -0.16
+    assert split.metrics["event_weighted_log_loss"].ci95 is not None
+
+
 def test_build_risk_preset_trials_exports_expected_return_percentile_bands() -> None:
     rows = [
         EvaluationRow(
@@ -205,10 +296,14 @@ def test_build_risk_preset_trials_exports_expected_return_percentile_bands() -> 
     assert trial.roi_projection[0].roi.expected == 0
     assert trial.roi_projection[-1].market_count == len(rows)
     assert all(
-        left.market_count < right.market_count
-        for left, right in zip(trial.roi_projection, trial.roi_projection[1:])
+        trial.roi_projection[index].market_count
+        < trial.roi_projection[index + 1].market_count
+        for index in range(len(trial.roi_projection) - 1)
     )
-    assert all(point.roi.p10 <= point.roi.expected <= point.roi.p90 for point in trial.roi_projection)
+    assert all(
+        point.roi.p10 <= point.roi.expected <= point.roi.p90
+        for point in trial.roi_projection
+    )
     assert trial.roi_paths
     assert all(path[0].market_count == 0 and path[0].roi == 0 for path in trial.roi_paths)
     assert all(path[-1].market_count == len(rows) for path in trial.roi_paths)
