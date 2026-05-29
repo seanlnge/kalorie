@@ -3,7 +3,10 @@ param(
     [int]$WebPort = 5173,
     [int]$PollIntervalSeconds = 60,
     [string]$ModelName = "",
-    [switch]$NoPoller
+    [switch]$NoPoller,
+    [switch]$LiveTrader,
+    [int]$TraderIntervalSeconds = 60,
+    [string]$RiskPresetId = "balanced"
 )
 
 $ErrorActionPreference = "Stop"
@@ -143,12 +146,34 @@ try {
             -WorkingDirectory $Root
     }
 
+    if ($LiveTrader) {
+        # Opt-in only. The trader still refuses to place real orders unless
+        # KALORIE2_TRADING_MODE=live and KALORIE2_LIVE_CONFIRMATION are set.
+        $traderArgs = @(
+            "-m",
+            "kalorie2.execution.cli",
+            "loop",
+            "--interval-seconds",
+            "$TraderIntervalSeconds",
+            "--risk-preset-id",
+            $RiskPresetId
+        )
+        Start-StackProcess `
+            -Name "live-trader" `
+            -FilePath $python `
+            -ArgumentList $traderArgs `
+            -WorkingDirectory $Root
+    }
+
     Write-Host ""
     Write-Host "Kalorie2 stack is running." -ForegroundColor Green
     Write-Host "  API: http://127.0.0.1:$ApiPort" -ForegroundColor DarkGray
     Write-Host "  Web: http://127.0.0.1:$WebPort" -ForegroundColor DarkGray
     if (-not $NoPoller) {
         Write-Host "  Poller: every $PollIntervalSeconds seconds" -ForegroundColor DarkGray
+    }
+    if ($LiveTrader) {
+        Write-Host "  Live trader: every $TraderIntervalSeconds seconds (mode from env)" -ForegroundColor Yellow
     }
     Write-Host "Press Ctrl+C to stop all processes." -ForegroundColor DarkGray
 

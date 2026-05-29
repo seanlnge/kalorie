@@ -220,6 +220,58 @@ export type CurrentMarketsStreamMessage =
       row: PollPredictionRow
     }
 
+export interface TraderSpec {
+  model_name: string
+  risk_preset_id: string
+  interval_seconds: number
+}
+
+export interface TraderRunSummary {
+  mode: string
+  poll_id?: string | null
+  kill_switch_active: boolean
+  evaluated: number
+  submitted: number
+  dry_run_approved: number
+  rejected: number
+  halted: number
+  failed: number
+  duplicates: number
+}
+
+export interface TraderStatus {
+  running: boolean
+  mode: string
+  spec: TraderSpec | null
+  started_at?: string | null
+  last_pass_at?: string | null
+  pass_count: number
+  last_error?: string | null
+  startup_error?: string | null
+  last_summary?: TraderRunSummary | null
+  kill_switch_active: boolean
+  halted_contracts: Record<string, unknown>
+  daily_orders: number
+  daily_loss: number
+}
+
+export interface TraderActivityItem {
+  ts?: string
+  event: string
+  mode?: string
+  poll_id?: string
+  market_ticker?: string
+  event_ticker?: string
+  side?: string
+  reason?: string
+  detail?: string
+  order_contracts?: number
+  limit_price?: number
+  order_dollars?: number
+  order_id?: string
+  [key: string]: unknown
+}
+
 export interface AccountSummary {
   available: boolean
   source: 'kalshi' | 'paper' | string

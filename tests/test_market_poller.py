@@ -15,6 +15,7 @@ from kalorie2.market_poller import (
     OpenAIWebEvidenceSource,
     PollPredictionRow,
     _load_env_file,
+    _poll_row_from_score,
     app,
     default_poll_cache_root,
     normalize_active_market,
@@ -179,6 +180,39 @@ def test_poll_snapshot_separates_all_predictions_from_trade_opportunities(tmp_pa
     assert len(snapshot.trade_rows) == 1
     assert snapshot.trade_rows[0].side == "NO"
     assert snapshot.trade_rows[0].edge == 0.06
+
+
+def test_poll_row_preserves_event_datetime_for_executor_cutoff() -> None:
+    # The live executor enforces the 2-hour pre-event cutoff from event_datetime,
+    # so trade rows emitted by the poller must carry it through scoring.
+    market = ActiveMarketRow(
+        market_ticker="KXEARNINGSMENTIONAAPL-26APR30-AI",
+        event_ticker="KXEARNINGSMENTIONAAPL-26APR30",
+        series_ticker="KXEARNINGSMENTIONAAPL",
+        event_datetime="2026-04-30T20:00:00Z",
+        event_title="What will Apple say during their next earnings call?",
+        market_title="What will Apple say during their next earnings call? - AI",
+        target_phrase="AI",
+        yes_bid=0.42,
+        yes_ask=0.45,
+        yes_mid=0.435,
+        volume=123,
+    )
+    score_payload = {
+        "raw": {
+            "market_ticker": market.market_ticker,
+            "event_ticker": market.event_ticker,
+            "model_probability": 0.31,
+            "market_probability": 0.435,
+            "residual_delta": -0.12,
+            "trade_decision": {"side": "NO", "edge": 0.06, "cost": 0.58},
+        }
+    }
+
+    row = _poll_row_from_score(market, "kalorie-v2", score_payload)
+
+    assert row.event_datetime == "2026-04-30T20:00:00Z"
+    assert row.side == "NO"
 
 
 def test_market_poller_cli_exposes_once_and_loop_commands() -> None:

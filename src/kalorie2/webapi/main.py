@@ -16,6 +16,12 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 from starlette.websockets import WebSocketDisconnect
 
+from kalorie2.execution.client import KalshiExecutionClient
+from kalorie2.execution.config import LiveTradingConfig
+from kalorie2.execution.rescore import Rescorer
+from kalorie2.execution.state import ExecutionStateStore, date_key
+from kalorie2.execution.supervisor import TraderRunner, TraderSpec, TraderSupervisor
+from kalorie2.execution.trader import LiveTrader
 from kalorie2.kalshi_account import (
     KalshiAccountClient,
     build_account_summary,
@@ -29,6 +35,7 @@ from kalorie2.market_poller import (
     KalshiActiveMarketSource,
     MarketPollCacheStore,
     MarketPollSnapshot,
+    OpenAIWebEvidenceSource,
     PollPredictionRow,
     default_poll_cache_root,
 )
@@ -51,6 +58,9 @@ from kalorie2.saved_models import (
 ExecutionMode = Literal["all", "no_only"]
 MARKET_POLL_INTERVAL_SECONDS = 60 * 60
 MODEL_RUN_INTERVAL_SECONDS = 60 * 60
+RESCORE_MAX_PAGES = 3
+RESCORE_WEB_SEARCH_MODEL = "gpt-5.4-mini"
+RESCORE_WEB_SEARCH_TIMEOUT_SECONDS = 120.0
 
 
 class CurrentMarketsRiskRequest(BaseModel):
@@ -71,6 +81,20 @@ class RiskPresetRequest(BaseModel):
     risk_preset: RiskPreset
 
 
+class TraderControlRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    model_name: str
+    risk_preset_id: str
+    interval_seconds: int = 15
+
+
+class KillSwitchRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = "manual stop"
+
+
 @dataclass
 class CurrentMarketPredictionCacheEntry:
     rows_by_ticker: dict[str, PollPredictionRow]
@@ -85,6 +109,9 @@ def create_app(
     models_root: Path | None = None,
     poll_cache_root: Path | None = None,
     env_path: Path | None = None,
+    execution_root: Path | None = None,
+    execution_state: ExecutionStateStore | None = None,
+    trader_supervisor: TraderSupervisor | None = None,
 ) -> FastAPI:
     load_env_file(env_path or _default_env_path())
     app = FastAPI(title="Kalorie2 Saved Model Workstation API", version="0.1.0")
@@ -106,6 +133,25 @@ def create_app(
     app.state.current_market_prediction_cache: dict[str, CurrentMarketPredictionCacheEntry] = {}
     app.state.orderbook_client_factory = KalshiOrderbookWebSocketClient
     app.state.risk_trial_cache: dict[str, dict] = {}
+    app.state.execution_root = execution_root or _default_execution_root()
+    app.state.execution_state = execution_state or ExecutionStateStore(
+        root=app.state.execution_root
+    )
+    app.state.rescorer = Rescorer(
+        market_source=_RescoreMarketSource(max_pages=RESCORE_MAX_PAGES),
+        scorer=CachedSavedModelMarketScorer(
+            models_root=app.state.models_root,
+            web_evidence_source=OpenAIWebEvidenceSource(
+                model=RESCORE_WEB_SEARCH_MODEL,
+                timeout_seconds=RESCORE_WEB_SEARCH_TIMEOUT_SECONDS,
+            ),
+        ),
+        cache_store=app.state.poll_cache_store,
+    )
+    app.state.trader_supervisor = trader_supervisor or TraderSupervisor(
+        trader_factory=_build_default_trader_factory(app),
+        on_start=lambda spec: app.state.rescorer.rescore_all(model_name=spec.model_name),
+    )
 
     @app.get("/api/models")
     def list_models() -> JSONResponse:
@@ -504,7 +550,113 @@ def create_app(
             )
             await websocket.close()
 
+    @app.get("/api/trader/status")
+    def trader_status() -> JSONResponse:
+        return JSONResponse({"status": _trader_status_payload(app)})
+
+    @app.post("/api/trader/start")
+    def trader_start(request: TraderControlRequest) -> JSONResponse:
+        supervisor: TraderSupervisor = app.state.trader_supervisor
+        started = supervisor.start(_spec_from_request(request))
+        if not started:
+            raise HTTPException(status_code=409, detail="Trader is already running")
+        return JSONResponse({"status": _trader_status_payload(app)})
+
+    @app.post("/api/trader/stop")
+    def trader_stop() -> JSONResponse:
+        supervisor: TraderSupervisor = app.state.trader_supervisor
+        supervisor.stop()
+        return JSONResponse({"status": _trader_status_payload(app)})
+
+    @app.post("/api/trader/restart")
+    def trader_restart(request: TraderControlRequest) -> JSONResponse:
+        supervisor: TraderSupervisor = app.state.trader_supervisor
+        supervisor.restart(_spec_from_request(request))
+        return JSONResponse({"status": _trader_status_payload(app)})
+
+    @app.get("/api/trader/activity")
+    def trader_activity(limit: int = 100) -> JSONResponse:
+        state: ExecutionStateStore = app.state.execution_state
+        return JSONResponse({"activity": state.read_audit(limit=limit)})
+
+    @app.post("/api/trader/kill")
+    def trader_kill(request: KillSwitchRequest) -> JSONResponse:
+        state: ExecutionStateStore = app.state.execution_state
+        state.activate_kill_switch(reason=request.reason)
+        return JSONResponse({"status": _trader_status_payload(app)})
+
+    @app.post("/api/trader/resume")
+    def trader_resume() -> JSONResponse:
+        state: ExecutionStateStore = app.state.execution_state
+        state.clear_kill_switch()
+        return JSONResponse({"status": _trader_status_payload(app)})
+
     return app
+
+
+def _spec_from_request(request: TraderControlRequest) -> TraderSpec:
+    return TraderSpec(
+        model_name=request.model_name,
+        risk_preset_id=request.risk_preset_id,
+        interval_seconds=request.interval_seconds,
+    )
+
+
+def _trader_status_payload(app: FastAPI) -> dict:
+    supervisor: TraderSupervisor = app.state.trader_supervisor
+    state: ExecutionStateStore = app.state.execution_state
+    status = supervisor.status().model_dump(mode="json")
+    status["kill_switch_active"] = state.kill_switch_active()
+    status["halted_contracts"] = state.halted_contracts()
+    today = date_key(datetime.now(tz=UTC))
+    status["daily_orders"] = state.daily_orders(today)
+    status["daily_loss"] = state.daily_loss(today)
+    return status
+
+
+def _build_default_trader_factory(app: FastAPI):
+    def factory(spec: TraderSpec) -> TraderRunner:
+        config = LiveTradingConfig.from_env(dict(os.environ))
+        risk_preset = get_risk_preset(
+            spec.risk_preset_id, store_path=app.state.risk_preset_store_path
+        )
+        http_client = httpx.Client(timeout=15)
+        client = KalshiExecutionClient.from_env(http_client=http_client)
+        if client is None:
+            http_client.close()
+            raise RuntimeError(
+                "Live trader requires KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY_PATH"
+            )
+        rescorer: Rescorer = app.state.rescorer
+        return LiveTrader(
+            config=config,
+            client=client,
+            state=app.state.execution_state,
+            risk_preset=risk_preset,
+            signal_source=app.state.poll_cache_store,
+            model_name=spec.model_name,
+            rescore_event=lambda event_ticker: rescorer.rescore_event(
+                model_name=spec.model_name, event_ticker=event_ticker
+            ),
+        )
+
+    return factory
+
+
+class _RescoreMarketSource:
+    """Opens a short-lived Kalshi client per fetch, mirroring the per-request
+    pattern used elsewhere so no long-lived HTTP client leaks in the app."""
+
+    def __init__(self, *, max_pages: int | None) -> None:
+        self._max_pages = max_pages
+
+    def list_active_markets(self) -> list[ActiveMarketRow]:
+        with httpx.Client(timeout=30) as http_client:
+            source = KalshiActiveMarketSource(
+                http_client=http_client,
+                max_pages=self._max_pages,
+            )
+            return source.list_active_markets()
 
 
 def _prediction_cache_entry(
@@ -713,6 +865,10 @@ def _default_models_root() -> Path:
 
 def _default_env_path() -> Path:
     return Path.cwd() / ".env"
+
+
+def _default_execution_root() -> Path:
+    return Path(__file__).resolve().parents[2] / "artifacts" / "runtime" / "execution"
 
 
 def _training_csv_path(model_dir: Path) -> Path:

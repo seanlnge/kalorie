@@ -9,6 +9,8 @@ import type {
   SampleRow,
   SavedModelMetadata,
   ScoreResponse,
+  TraderActivityItem,
+  TraderStatus,
 } from './types'
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000'
@@ -176,4 +178,67 @@ export function currentMarketsStreamUrl(modelName: string, riskPreset: RiskPrese
 export async function getPollHistory(limit = 50): Promise<PollSnapshot[]> {
   const payload = await request<{ snapshots: PollSnapshot[] }>(`/api/polls/history?limit=${limit}`)
   return payload.snapshots
+}
+
+export async function getTraderStatus(): Promise<TraderStatus> {
+  const payload = await request<{ status: TraderStatus }>('/api/trader/status')
+  return payload.status
+}
+
+interface TraderControlBody {
+  readonly modelName: string
+  readonly riskPresetId: string
+  readonly intervalSeconds?: number
+}
+
+function traderControlPayload(body: TraderControlBody): string {
+  return JSON.stringify({
+    model_name: body.modelName,
+    risk_preset_id: body.riskPresetId,
+    interval_seconds: body.intervalSeconds ?? 15,
+  })
+}
+
+export async function startTrader(body: TraderControlBody): Promise<TraderStatus> {
+  const payload = await request<{ status: TraderStatus }>('/api/trader/start', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: traderControlPayload(body),
+  })
+  return payload.status
+}
+
+export async function restartTrader(body: TraderControlBody): Promise<TraderStatus> {
+  const payload = await request<{ status: TraderStatus }>('/api/trader/restart', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: traderControlPayload(body),
+  })
+  return payload.status
+}
+
+export async function stopTrader(): Promise<TraderStatus> {
+  const payload = await request<{ status: TraderStatus }>('/api/trader/stop', { method: 'POST' })
+  return payload.status
+}
+
+export async function engageKillSwitch(reason = 'manual stop'): Promise<TraderStatus> {
+  const payload = await request<{ status: TraderStatus }>('/api/trader/kill', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ reason }),
+  })
+  return payload.status
+}
+
+export async function resumeKillSwitch(): Promise<TraderStatus> {
+  const payload = await request<{ status: TraderStatus }>('/api/trader/resume', { method: 'POST' })
+  return payload.status
+}
+
+export async function getTraderActivity(limit = 100): Promise<TraderActivityItem[]> {
+  const payload = await request<{ activity: TraderActivityItem[] }>(
+    `/api/trader/activity?limit=${limit}`,
+  )
+  return payload.activity
 }

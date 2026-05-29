@@ -33,6 +33,7 @@ kalorie2-transcript-model = "kalorie2.transcript_model:app"
 kalorie2-prediction-engine = "kalorie2.prediction_cli:app"
 kalorie2-webapi = "kalorie2.webapi.main:run"
 kalorie2-market-poller = "kalorie2.market_poller:app"
+kalorie2-live-trader = "kalorie2.execution.cli:app"
 
 [tool.setuptools.packages.find]
 where = ["src"]

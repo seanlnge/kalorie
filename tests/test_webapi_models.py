@@ -556,7 +556,7 @@ def test_current_markets_endpoint_scores_latest_active_market_rows(
             ]
 
     class FakeScorer:
-        def __init__(self, *, models_root: Path) -> None:
+        def __init__(self, *, models_root: Path, web_evidence_source: object = None) -> None:
             self.models_root = models_root
 
         def score_active_markets(
@@ -626,7 +626,7 @@ def test_current_markets_endpoint_accepts_custom_risk_preset_body(
             ]
 
     class FakeScorer:
-        def __init__(self, *, models_root: Path) -> None:
+        def __init__(self, *, models_root: Path, web_evidence_source: object = None) -> None:
             self.models_root = models_root
 
         def score_active_markets(
@@ -706,7 +706,7 @@ def test_current_markets_reuses_cached_predictions_when_only_risk_changes(
     class FakeScorer:
         calls = 0
 
-        def __init__(self, *, models_root: Path) -> None:
+        def __init__(self, *, models_root: Path, web_evidence_source: object = None) -> None:
             self.models_root = models_root
 
         def score_active_markets(
@@ -793,7 +793,7 @@ def test_current_markets_can_reapply_risk_without_refetching_kalshi_markets(
     class FakeScorer:
         calls = 0
 
-        def __init__(self, *, models_root: Path) -> None:
+        def __init__(self, *, models_root: Path, web_evidence_source: object = None) -> None:
             self.models_root = models_root
 
         def score_active_markets(
@@ -873,7 +873,7 @@ def test_current_markets_stream_reprices_rows_from_orderbook_quotes(
             ]
 
     class FakeScorer:
-        def __init__(self, *, models_root: Path) -> None:
+        def __init__(self, *, models_root: Path, web_evidence_source: object = None) -> None:
             self.models_root = models_root
 
         def score_active_markets(

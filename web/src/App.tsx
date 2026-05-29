@@ -1,6 +1,7 @@
 import { AlertTriangle } from 'lucide-react'
 import { useEffect, useState } from 'react'
 
+import { AutoTraderPage } from '@/components/AutoTraderPage'
 import { CurrentMarketsPage } from '@/components/CurrentMarketsPage'
 import { ModelOverviewPage } from '@/components/ModelOverviewPage'
 import { ModelPickerDropdown } from '@/components/ModelPickerDropdown'
@@ -10,6 +11,7 @@ import { useAccountSummary } from '@/hooks/useAccountSummary'
 import { useLiveCurrentMarkets } from '@/hooks/useLiveCurrentMarkets'
 import { useOpenPositions } from '@/hooks/useOpenPositions'
 import { useRiskPresetTrial } from '@/hooks/useRiskPresetTrial'
+import { useTrader } from '@/hooks/useTrader'
 import { useWorkstation } from '@/hooks/useWorkstation'
 import {
   createRiskPreset as createRiskPresetFile,
@@ -20,7 +22,7 @@ import {
 import { formatDollars } from '@/lib/format'
 import type { AccountSummary, RiskPreset } from '@/lib/types'
 
-type ViewId = 'markets' | 'history' | 'model'
+type ViewId = 'markets' | 'history' | 'model' | 'trader'
 
 function App() {
   const workstation = useWorkstation()
@@ -33,6 +35,10 @@ function App() {
     riskPresets.find((preset) => preset.id === selectedRiskPresetId) ?? riskPresets[0] ?? null
   const currentMarkets = useLiveCurrentMarkets(workstation.selectedModelName, selectedRiskPreset)
   const riskTrial = useRiskPresetTrial(workstation.selectedModel, selectedRiskPreset)
+  const trader = useTrader({
+    stagedModelName: workstation.selectedModelName,
+    stagedRiskPreset: selectedRiskPreset,
+  })
   const [activeView, setActiveView] = useState<ViewId>('markets')
 
   useEffect(() => {
@@ -114,6 +120,11 @@ function App() {
                   label="Model Overview"
                   onClick={() => setActiveView('model')}
                 />
+                <ViewButton
+                  active={activeView === 'trader'}
+                  label="Auto Trader"
+                  onClick={() => setActiveView('trader')}
+                />
               </nav>
             </div>
             <div className="grid min-w-[24rem] flex-1 grid-cols-[minmax(11rem,1fr)_minmax(11rem,1fr)] gap-2">
@@ -132,10 +143,11 @@ function App() {
             </div>
             <div className="ml-auto flex shrink-0 flex-wrap items-center gap-3">
               <PortfolioReadout summary={account.summary} />
-              <span className="inline-flex h-8 items-center gap-2 rounded-lg border border-red/35 bg-red/10 px-3 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-red">
-                <span className="h-1.5 w-1.5 rounded-full bg-red" />
-                Read only
-              </span>
+              <TraderBadge
+                running={trader.status?.running ?? false}
+                mode={trader.status?.mode ?? 'off'}
+                onClick={() => setActiveView('trader')}
+              />
             </div>
           </div>
         </header>
@@ -169,6 +181,24 @@ function App() {
             <TradingHistoryPage
               positions={openPositions.summary}
               currentMarketRows={currentMarkets.snapshot?.prediction_rows ?? []}
+            />
+          ) : null}
+
+          {activeView === 'trader' ? (
+            <AutoTraderPage
+              status={trader.status}
+              activity={trader.activity}
+              error={trader.error}
+              busy={trader.busy}
+              stagedModelName={workstation.selectedModelName}
+              stagedRiskPreset={selectedRiskPreset}
+              stagedDiffersFromRunning={trader.stagedDiffersFromRunning}
+              positions={openPositions.summary}
+              onStart={() => void trader.start()}
+              onStop={() => void trader.stop()}
+              onRestart={() => void trader.restart()}
+              onKill={() => void trader.kill()}
+              onResume={() => void trader.resume()}
             />
           ) : null}
 
@@ -238,6 +268,33 @@ function PortfolioReadout({ summary }: { readonly summary: AccountSummary }) {
       <span className="font-mono text-sm font-semibold text-foreground">{portfolioLabel}</span>
       <span className="font-mono text-xs text-muted">{freeCashLabel}</span>
     </div>
+  )
+}
+
+interface TraderBadgeProps {
+  readonly running: boolean
+  readonly mode: string
+  readonly onClick: () => void
+}
+
+function TraderBadge({ running, mode, onClick }: TraderBadgeProps) {
+  const live = mode === 'live'
+  const toneClass = !running
+    ? 'border-line bg-panelStrong text-muted'
+    : live
+      ? 'border-red/35 bg-red/10 text-red'
+      : 'border-green/35 bg-green/10 text-green'
+  const dotClass = !running ? 'bg-muted' : live ? 'bg-red' : 'bg-green'
+  const label = !running ? 'Trader off' : live ? 'Live trading' : 'Dry run'
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex h-8 items-center gap-2 rounded-lg border px-3 font-mono text-[10px] font-semibold uppercase tracking-[0.16em] transition ${toneClass}`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${dotClass} ${running ? 'animate-pulse' : ''}`} />
+      {label}
+    </button>
   )
 }
 
