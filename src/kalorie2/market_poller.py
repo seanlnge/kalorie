@@ -5,6 +5,7 @@ import json
 import os
 import time
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any, Literal, Protocol
@@ -152,9 +153,11 @@ class KalshiActiveMarketSource:
         http_client: httpx.Client,
         base_url: str = "https://api.elections.kalshi.com/trade-api/v2",
         max_pages: int | None = None,
+        scan_all_open_markets: bool = True,
     ) -> None:
         self._client = KalshiMentionClient(http_client=http_client, base_url=base_url)
         self._max_pages = max_pages
+        self._scan_all_open_markets = scan_all_open_markets
 
     def list_active_markets(self) -> list[ActiveMarketRow]:
         rows_by_ticker: dict[str, ActiveMarketRow] = {}
@@ -213,20 +216,23 @@ class KalshiActiveMarketSource:
                 if not isinstance(market_payload, dict):
                     continue
                 collect_row(event_payload, market_payload)
-        for market_payload in self._client.iter_markets(
-            status="open",
-            historical=False,
-            limit=200,
-            max_pages=self._max_pages,
-        ):
-            event_payload = {
-                "event_ticker": str(market_payload.get("event_ticker") or "").strip(),
-                "series_ticker": str(market_payload.get("series_ticker") or "").strip(),
-                "event_title": str(
-                    market_payload.get("event_title") or market_payload.get("subtitle") or ""
-                ).strip(),
-            }
-            collect_row(event_payload, market_payload)
+        if self._scan_all_open_markets:
+            for market_payload in self._client.iter_markets(
+                status="open",
+                historical=False,
+                limit=200,
+                max_pages=self._max_pages,
+            ):
+                event_payload = {
+                    "event_ticker": str(market_payload.get("event_ticker") or "").strip(),
+                    "series_ticker": str(market_payload.get("series_ticker") or "").strip(),
+                    "event_title": str(
+                        market_payload.get("event_title")
+                        or market_payload.get("subtitle")
+                        or ""
+                    ).strip(),
+                }
+                collect_row(event_payload, market_payload)
         rows = list(rows_by_ticker.values())
         return sorted(
             rows,
@@ -283,10 +289,12 @@ class OpenAIWebEvidenceSource:
         *,
         model: str,
         timeout_seconds: float = 120.0,
+        max_workers: int = 12,
         fetch_web_evidence_packet: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
         self._model = model
         self._timeout_seconds = timeout_seconds
+        self._max_workers = max(1, int(max_workers))
         self._fetch_web_evidence_packet = fetch_web_evidence_packet or _fetch_web_evidence_packet
 
     def fetch_packets(self, markets: list[ActiveMarketRow]) -> dict[str, Any]:
@@ -295,8 +303,9 @@ class OpenAIWebEvidenceSource:
         grouped_markets: dict[str, list[ActiveMarketRow]] = {}
         for market in markets:
             grouped_markets.setdefault(market.event_ticker, []).append(market)
-        packets = {}
+        packets: dict[str, Any] = {}
         cutoff_time_iso = datetime.now(tz=UTC).isoformat()
+        jobs: list[tuple[str, str, list[str]]] = []
         for event_ticker, event_markets in grouped_markets.items():
             first_market = event_markets[0]
             target_phrases = sorted(
@@ -306,21 +315,47 @@ class OpenAIWebEvidenceSource:
                     if event_market.target_phrase.strip()
                 }
             )
+            jobs.append(
+                (
+                    event_ticker,
+                    _company_name_from_event_title(first_market.event_title),
+                    target_phrases,
+                )
+            )
+
+        def fetch_one(
+            job: tuple[str, str, list[str]],
+        ) -> tuple[str, dict[str, Any] | None, str | None]:
+            event_ticker, company_name, target_phrases = job
             try:
                 payload = self._fetch_web_evidence_packet(
                     event_ticker=event_ticker,
-                    company_name=_company_name_from_event_title(first_market.event_title),
+                    company_name=company_name,
                     cutoff_time_iso=cutoff_time_iso,
                     target_phrases=target_phrases,
                     model=self._model,
                     timeout_seconds=self._timeout_seconds,
                 )
-                packets[event_ticker] = payload
+                return event_ticker, payload, None
             except Exception as exc:  # noqa: BLE001
-                typer.echo(
-                    f"warning: live web evidence fetch failed for {event_ticker}: {exc}",
-                    err=True,
+                return event_ticker, None, str(exc)
+
+        workers = min(self._max_workers, len(jobs))
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(fetch_one, job) for job in jobs]
+            for future in as_completed(futures):
+                event_ticker, payload, error = future.result()
+                if payload is not None:
+                    packets[event_ticker] = payload
+                    continue
+                message = (
+                    f"warning: live web evidence fetch failed for {event_ticker}: {error}"
                 )
+                print(message, flush=True)
+                try:
+                    typer.echo(message, err=True)
+                except Exception:  # noqa: BLE001
+                    pass
         return packets
 
 
@@ -555,7 +590,10 @@ def _poll_row_from_score(
     model_name: str,
     score_payload: dict[str, Any],
 ) -> PollPredictionRow:
-    score_row = normalize_score_payload(score_payload.get("raw", score_payload))
+    raw = score_payload.get("raw", score_payload)
+    score_row = normalize_score_payload(raw)
+    eligible_raw = raw.get("prediction_eligible") if isinstance(raw, dict) else None
+    eligible = None if eligible_raw is None else bool(eligible_raw)
     return PollPredictionRow(
         market_ticker=market.market_ticker,
         event_ticker=market.event_ticker,
@@ -572,6 +610,7 @@ def _poll_row_from_score(
         edge=score_row.edge,
         cost=score_row.cost,
         volume=market.volume,
+        passes_risk_filter=eligible,
     )
 
 
