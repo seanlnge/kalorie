@@ -250,15 +250,16 @@ def ensure_openai_api_key() -> None:
 
 def handler_from_event(event: dict[str, Any] | None) -> dict[str, Any]:
     event = event or {}
-    ensure_openai_api_key()
     model_name = str(event.get("model_name") or os.environ.get("MODEL_NAME") or "kalorie-v6")
     models_root = Path(os.environ.get("MODELS_ROOT") or "/opt/models")
     bucket = os.environ.get("SNAPSHOT_BUCKET")
     if not bucket:
         raise RuntimeError("SNAPSHOT_BUCKET is required")
     live_web_evidence = str(
-        event.get("live_web_evidence", os.environ.get("LIVE_WEB_EVIDENCE", "true"))
+        event.get("live_web_evidence", os.environ.get("LIVE_WEB_EVIDENCE", "false"))
     ).lower() not in {"0", "false", "no"}
+    if live_web_evidence:
+        ensure_openai_api_key()
     web_search_model = str(
         event.get("web_search_model")
         or os.environ.get("WEB_SEARCH_MODEL")

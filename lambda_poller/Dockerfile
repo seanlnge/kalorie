@@ -25,7 +25,6 @@ COPY models/kalorie-v6/training/web-evidence /opt/models/kalorie-v6/training/web
 ENV PYTHONPATH=/opt/kalorie2/src
 ENV MODELS_ROOT=/opt/models
 ENV MODEL_NAME=kalorie-v6
-ENV LIVE_WEB_EVIDENCE=true
-ENV WEB_SEARCH_MODEL=gpt-5.4-mini
+ENV LIVE_WEB_EVIDENCE=false
 
 CMD ["handler.handler"]

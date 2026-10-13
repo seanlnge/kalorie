@@ -8,7 +8,6 @@ import { DockerImageCode, DockerImageFunction } from "aws-cdk-lib/aws-lambda";
 import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3 from "aws-cdk-lib/aws-s3";
 import * as scheduler from "aws-cdk-lib/aws-scheduler";
-import * as secretsmanager from "aws-cdk-lib/aws-secretsmanager";
 import { Construct } from "constructs";
 
 function findWorkspaceRoot(startDir: string): string {
@@ -68,17 +67,6 @@ export class KaloriePollerStack extends cdk.Stack {
       value: `https://${snapshotBucket.bucketRegionalDomainName}`,
     });
 
-    // Paste OPENAI_API_KEY after deploy (see README):
-    //   aws secretsmanager put-secret-value \
-    //     --secret-id <OpenAiSecretArn> \
-    //     --secret-string '{"OPENAI_API_KEY":"sk-..."}'
-    const openAiSecret = new secretsmanager.Secret(this, "OpenAiSecret", {
-      description: "Kalorie poller OpenAI credentials (JSON: OPENAI_API_KEY)",
-      secretStringValue: cdk.SecretValue.unsafePlainText(
-        JSON.stringify({ OPENAI_API_KEY: "REPLACE_ME" }),
-      ),
-    });
-
     const workspaceRoot = findWorkspaceRoot(__dirname);
 
     const pollerLogGroup = new logs.LogGroup(this, "SnapshotPollerLogGroup", {
@@ -106,41 +94,30 @@ export class KaloriePollerStack extends cdk.Stack {
         SNAPSHOT_BUCKET: snapshotBucket.bucketName,
         MODEL_NAME: "kalorie-v6",
         MODELS_ROOT: "/opt/models",
-        LIVE_WEB_EVIDENCE: "true",
-        WEB_SEARCH_MODEL: "gpt-5.4-mini",
-        WEB_EVIDENCE_MAX_WORKERS: "12",
+        LIVE_WEB_EVIDENCE: "false",
         KALSHI_SCAN_ALL_OPEN_MARKETS: "false",
-        OPENAI_SECRET_ARN: openAiSecret.secretArn,
       },
       logGroup: pollerLogGroup,
     });
 
     snapshotBucket.grantPut(pollerFn);
-    openAiSecret.grantRead(pollerFn);
-
-    // EventBridge Scheduler with America/New_York so 5am / 8pm Eastern
-    // stay correct across EST/EDT (classic EventBridge Rules are UTC-only).
+    // The timezone keeps 4am Eastern correct across EST/EDT (classic
+    // EventBridge Rules are UTC-only).
     const schedulerRole = new iam.Role(this, "PollerSchedulerRole", {
       assumedBy: new iam.ServicePrincipal("scheduler.amazonaws.com"),
     });
     pollerFn.grantInvoke(schedulerRole);
 
-    const easternSchedules: { id: string; hour: string; label: string }[] = [
-      { id: "FiveAmEastern", hour: "5", label: "5:00 AM Eastern" },
-      { id: "EightPmEastern", hour: "20", label: "8:00 PM Eastern" },
-    ];
-    for (const item of easternSchedules) {
-      new scheduler.CfnSchedule(this, item.id, {
-        description: `Run Kalorie snapshot poller at ${item.label}`,
-        flexibleTimeWindow: { mode: "OFF" },
-        scheduleExpression: `cron(0 ${item.hour} * * ? *)`,
-        scheduleExpressionTimezone: "America/New_York",
-        target: {
-          arn: pollerFn.functionArn,
-          roleArn: schedulerRole.roleArn,
-        },
-      });
-    }
+    new scheduler.CfnSchedule(this, "FourAmEastern", {
+      description: "Run Kalorie snapshot poller once daily at 4:00 AM Eastern",
+      flexibleTimeWindow: { mode: "OFF" },
+      scheduleExpression: "cron(0 4 * * ? *)",
+      scheduleExpressionTimezone: "America/New_York",
+      target: {
+        arn: pollerFn.functionArn,
+        roleArn: schedulerRole.roleArn,
+      },
+    });
 
     new cdk.CfnOutput(this, "SnapshotBucketName", {
       value: snapshotBucket.bucketName,
@@ -148,14 +125,11 @@ export class KaloriePollerStack extends cdk.Stack {
     new cdk.CfnOutput(this, "PollerFunctionName", {
       value: pollerFn.functionName,
     });
-    new cdk.CfnOutput(this, "OpenAiSecretArn", {
-      value: openAiSecret.secretArn,
-    });
     new cdk.CfnOutput(this, "ScheduleTimezone", {
       value: "America/New_York",
     });
-    new cdk.CfnOutput(this, "ScheduleHoursEastern", {
-      value: "05:00,20:00",
+    new cdk.CfnOutput(this, "ScheduleHourEastern", {
+      value: "04:00",
     });
   }
 }

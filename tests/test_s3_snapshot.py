@@ -255,7 +255,12 @@ def test_handler_from_event_uses_env(monkeypatch: pytest.MonkeyPatch, tmp_path: 
     monkeypatch.setenv("SNAPSHOT_BUCKET", bucket)
     monkeypatch.setenv("MODELS_ROOT", str(tmp_path))
     monkeypatch.setenv("MODEL_NAME", "kalorie-v6")
-    monkeypatch.setenv("LIVE_WEB_EVIDENCE", "false")
+    monkeypatch.delenv("LIVE_WEB_EVIDENCE", raising=False)
+    monkeypatch.setenv("OPENAI_SECRET_ARN", "arn:aws:secretsmanager:us-east-1:123456789012:secret:unused")
+    monkeypatch.setattr(
+        "kalorie2.s3_snapshot.ensure_openai_api_key",
+        lambda: pytest.fail("disabled web evidence must not fetch an OpenAI secret"),
+    )
 
     class StubSource:
         def list_active_markets(self) -> list[ActiveMarketRow]:
